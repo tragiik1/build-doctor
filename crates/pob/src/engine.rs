@@ -21,7 +21,7 @@ unsafe extern "C-unwind" {
 /// created it; run one per thread for parallel work.
 #[derive(Debug)]
 pub struct Engine {
-    lua: Lua,
+    pub(crate) lua: Lua,
     pub(crate) install: Install,
 }
 
@@ -240,7 +240,7 @@ impl Engine {
 
     /// A Lua error without its traceback, plus (when `with_log`) the tail of
     /// PoB's own output, which names the cause when PoB fails to start.
-    fn describe(&self, err: &mlua::Error, with_log: bool) -> String {
+    pub(crate) fn describe(&self, err: &mlua::Error, with_log: bool) -> String {
         let message = match err {
             mlua::Error::RuntimeError(msg) => msg.clone(),
             mlua::Error::CallbackError { cause, .. } => cause.to_string(),
@@ -430,14 +430,15 @@ mod tests {
         );
     }
 
-    /// What-ifs spread over several engines give exactly what one engine
-    /// gives running them in sequence, in input order.
+    /// What-ifs spread over a pool give exactly what one engine gives
+    /// running them in sequence, in input order, and every worker proves it
+    /// loaded the same build.
     #[test]
     #[ignore = "needs a PoB2 install in DOCTOR_POB_DIR"]
-    fn parallel_what_ifs_match_sequential() {
+    fn pool_what_ifs_match_sequential() {
         let xml = fixture("maxroll_gd79010q.xml");
         let engine = engine();
-        engine.load(&xml).unwrap();
+        let base = engine.load(&xml).unwrap();
         let vars: Vec<String> = engine
             .assumptions()
             .unwrap()
@@ -447,12 +448,51 @@ mod tests {
             .map(|a| a.var)
             .collect();
         let run = |engine: &Engine, var: String| engine.without_config(&[&var]).map(|c| c.stats);
-        let parallel = engine.map(&xml, 2, vars.clone(), run).unwrap();
+        let pool = crate::Pool::new(&engine.install, 2).unwrap();
+        let parallel = pool
+            .map(&xml, Some(&base.stats), vars.clone(), run)
+            .unwrap();
         let sequential: Vec<_> = vars.into_iter().map(|v| run(&engine, v).unwrap()).collect();
         for (p, s) in parallel.iter().zip(&sequential) {
             assert_eq!(p.diff(s), []);
         }
-        engine.ensure_original().unwrap();
+        // A wrong expectation is refused, not silently accepted.
+        let other = engine
+            .load(&fixture("7occvtBuTEOp.xml"))
+            .unwrap_or(base.clone());
+        if other.stats != base.stats {
+            assert!(
+                pool.map(&xml, Some(&other.stats), vec![()], |_, ()| Ok(()))
+                    .is_err()
+            );
+        }
+    }
+
+    /// An exact tree trial reports what changed and leaves the build as it
+    /// was (checked by ensure_original's canonical comparison).
+    #[test]
+    #[ignore = "needs a PoB2 install in DOCTOR_POB_DIR"]
+    fn tree_trial_changes_the_tree_and_restores_it() {
+        let engine = engine();
+        let base = engine.load(&fixture("maxroll_gd79010q.xml")).unwrap();
+        let screen = engine.tree_screen(4, 0, 1).unwrap();
+        let add = screen
+            .adds
+            .iter()
+            .find(|o| o.cost == 1)
+            .expect("a 1-point addition");
+        let remove = screen
+            .removes
+            .iter()
+            .find(|o| o.cost == 1 && !o.nodes.iter().any(|n| add.nodes.contains(n)))
+            .expect("a 1-point removal");
+        let trial = engine.try_tree(&[remove.node.id], &[add.node.id]).unwrap();
+        assert!(trial.added.iter().any(|n| n.id == add.node.id));
+        assert!(trial.removed.iter().any(|n| n.id == remove.node.id));
+        assert_eq!(trial.points_after, trial.points_before);
+        let restored = engine.ensure_original().unwrap();
+        let restored = StatSheet::from_build_xml(&restored).unwrap();
+        assert_eq!(base.stats.diff(&restored), []);
     }
 
     #[test]

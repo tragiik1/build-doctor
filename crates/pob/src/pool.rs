@@ -1,97 +1,203 @@
-//! Spreading what-ifs on one build over several engines.
+//! A pool of long-lived PoB engines for parallel what-ifs.
+//!
+//! Each worker thread owns one engine (engines never cross threads). Work is
+//! sent as a build plus a list of items; a worker loads the build only when
+//! it changes, and the first load of every build is checked against the
+//! stats the caller expects, so all workers provably calculate the same
+//! build. After its share of the items, every worker checks it is back on
+//! the original build.
 
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crate::{Engine, Error, Install, Result};
+use crate::{Engine, Error, Install, Result, StatSheet};
 
-impl Engine {
-    /// Runs `job` for every item and returns the results in input order.
-    ///
-    /// `self` must have the build loaded; it does part of the work on the
-    /// calling thread. `extra_workers` more engines are started on their own
-    /// threads (each costs a PoB start-up and roughly 300 MB), load the same
-    /// build, and must reproduce `self`'s saved output exactly before they
-    /// take any work. Every engine is checked to be back in its original
-    /// state when it finishes.
+type Task = Box<dyn FnOnce(&mut Slot) + Send>;
+
+/// A worker's engine and the build it has loaded.
+struct Slot {
+    engine: Engine,
+    loaded: Option<Arc<str>>,
+}
+
+impl Slot {
+    /// Loads `xml` unless it is already loaded, then checks the loaded
+    /// build's stats against `expected` (on every call, not only the first).
+    fn ensure_loaded(&mut self, xml: &Arc<str>, expected: Option<&StatSheet>) -> Result<()> {
+        let stats = if self.loaded.as_deref() == Some(&**xml) {
+            match expected {
+                Some(_) => StatSheet::from_build_xml(&self.engine.ensure_original()?)?,
+                None => return Ok(()),
+            }
+        } else {
+            self.loaded = None;
+            let calc = self.engine.load(xml)?;
+            self.loaded = Some(Arc::clone(xml));
+            calc.stats
+        };
+        if let Some(expected) = expected {
+            let mismatches: Vec<String> = expected
+                .diff(&stats)
+                .iter()
+                .filter(|d| d.is_mismatch())
+                .map(ToString::to_string)
+                .collect();
+            if !mismatches.is_empty() {
+                return Err(Error::Pob(format!(
+                    "a PoB worker calculated the build differently than expected: {}",
+                    mismatches.join("; ")
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct Pool {
+    workers: Vec<(mpsc::Sender<Task>, thread::JoinHandle<()>)>,
+}
+
+impl Pool {
+    /// Starts `size` engines (at least one), each on its own thread. Every
+    /// engine costs a PoB start-up and roughly 300 MB.
+    pub fn new(install: &Install, size: usize) -> Result<Self> {
+        let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
+        let mut workers = Vec::new();
+        for _ in 0..size.max(1) {
+            let (tx, rx) = mpsc::channel::<Task>();
+            let install = install.clone();
+            let ready = ready_tx.clone();
+            let handle = thread::spawn(move || {
+                let mut slot = match Engine::start(&install) {
+                    Ok(engine) => {
+                        let _ = ready.send(Ok(()));
+                        Slot {
+                            engine,
+                            loaded: None,
+                        }
+                    }
+                    Err(err) => {
+                        let _ = ready.send(Err(err));
+                        return;
+                    }
+                };
+                while let Ok(task) = rx.recv() {
+                    task(&mut slot);
+                }
+            });
+            workers.push((tx, handle));
+        }
+        drop(ready_tx);
+        for _ in 0..workers.len() {
+            ready_rx
+                .recv()
+                .map_err(|_| Error::Startup("a PoB worker thread exited".into()))??;
+        }
+        Ok(Self { workers })
+    }
+
+    pub fn size(&self) -> usize {
+        self.workers.len()
+    }
+
+    /// Runs `job` on every item with `xml` loaded and returns the results in
+    /// input order. When `expected` is given, each worker's load of `xml`
+    /// must reproduce those stats exactly before it takes work.
     pub fn map<I, T, F>(
         &self,
         xml: &str,
-        extra_workers: usize,
+        expected: Option<&StatSheet>,
         items: Vec<I>,
         job: F,
     ) -> Result<Vec<T>>
     where
-        I: Send,
-        T: Send,
-        F: Fn(&Engine, I) -> Result<T> + Sync,
+        I: Send + 'static,
+        T: Send + 'static,
+        F: Fn(&Engine, I) -> Result<T> + Send + Sync + 'static,
     {
-        let expected = self.ensure_original()?;
+        struct Shared<I, T> {
+            queue: Mutex<VecDeque<(usize, I)>>,
+            results: Mutex<Vec<Option<T>>>,
+            failure: Mutex<Option<Error>>,
+        }
         let count = items.len();
-        let queue = Mutex::new(items.into_iter().enumerate().collect::<VecDeque<_>>());
-        let results: Mutex<Vec<Option<T>>> = Mutex::new((0..count).map(|_| None).collect());
-        let failure: Mutex<Option<Error>> = Mutex::new(None);
-
-        let work = |engine: &Engine| -> Result<()> {
-            loop {
-                if failure.lock().expect("poisoned").is_some() {
-                    return Ok(());
-                }
-                let Some((index, item)) = queue.lock().expect("poisoned").pop_front() else {
-                    break;
-                };
-                let value = job(engine, item)?;
-                results.lock().expect("poisoned")[index] = Some(value);
-            }
-            engine.ensure_original().map(drop)
-        };
-        let record = |result: Result<()>| {
-            if let Err(err) = result {
-                failure.lock().expect("poisoned").get_or_insert(err);
-            }
-        };
-
-        let workers = extra_workers.min(count.saturating_sub(1));
-        let install = self.install.clone();
-        thread::scope(|scope| {
-            for _ in 0..workers {
-                scope.spawn(|| {
-                    record(
-                        worker_engine(&install, xml, &expected).and_then(|engine| work(&engine)),
-                    );
-                });
-            }
-            record(work(self));
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let shared = Arc::new(Shared {
+            queue: Mutex::new(items.into_iter().enumerate().collect()),
+            results: Mutex::new((0..count).map(|_| None).collect()),
+            failure: Mutex::new(None),
         });
+        let job = Arc::new(job);
+        let xml: Arc<str> = Arc::from(xml);
+        let expected = expected.cloned().map(Arc::new);
+        let (done_tx, done_rx) = mpsc::channel::<()>();
 
-        if let Some(err) = failure.into_inner().expect("poisoned") {
+        let active = self.workers.len().min(count);
+        for (tx, _) in &self.workers[..active] {
+            let shared = Arc::clone(&shared);
+            let job = Arc::clone(&job);
+            let xml = Arc::clone(&xml);
+            let expected = expected.clone();
+            let done = done_tx.clone();
+            let task: Task = Box::new(move |slot: &mut Slot| {
+                let result = (|| -> Result<()> {
+                    slot.ensure_loaded(&xml, expected.as_deref())?;
+                    loop {
+                        if lock(&shared.failure).is_some() {
+                            return Ok(());
+                        }
+                        let Some((index, item)) = lock(&shared.queue).pop_front() else {
+                            break;
+                        };
+                        let value = job(&slot.engine, item)?;
+                        lock(&shared.results)[index] = Some(value);
+                    }
+                    slot.engine.ensure_original().map(drop)
+                })();
+                if let Err(err) = result {
+                    lock(&shared.failure).get_or_insert(err);
+                    // The engine's state is unknown after a failure.
+                    slot.loaded = None;
+                }
+                let _ = done.send(());
+            });
+            tx.send(task)
+                .map_err(|_| Error::Startup("a PoB worker thread exited".into()))?;
+        }
+        drop(done_tx);
+        for _ in 0..active {
+            done_rx
+                .recv()
+                .map_err(|_| Error::Startup("a PoB worker thread exited".into()))?;
+        }
+
+        if let Some(err) = lock(&shared.failure).take() {
             return Err(err);
         }
+        let results = std::mem::take(&mut *lock(&shared.results));
         Ok(results
-            .into_inner()
-            .expect("poisoned")
             .into_iter()
             .map(|r| r.expect("every queued item was processed"))
             .collect())
     }
 }
 
-/// A second engine with the same build loaded, proven to agree with the first.
-fn worker_engine(install: &Install, xml: &str, expected: &str) -> Result<Engine> {
-    let engine = Engine::start(install)?;
-    let calc = engine.load(xml)?;
-    let reference = crate::StatSheet::from_build_xml(expected)?;
-    let mismatches: Vec<String> = reference
-        .diff(&calc.stats)
-        .iter()
-        .map(ToString::to_string)
-        .collect();
-    if !mismatches.is_empty() {
-        return Err(Error::Pob(format!(
-            "a second PoB engine calculated the build differently: {}",
-            mismatches.join("; ")
-        )));
+impl Drop for Pool {
+    fn drop(&mut self) {
+        for (tx, handle) in self.workers.drain(..) {
+            drop(tx);
+            let _ = handle.join();
+        }
     }
-    Ok(engine)
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }

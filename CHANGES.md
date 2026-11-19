@@ -3,6 +3,63 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-19: Ranked to-do list, passive tree (`doctor todo`)
+
+**What changed**
+- `doctor todo <build> [--keep …] [--goal damage|survival] [--steps 5]
+  [--max-distance 6] [--export FILE] [--jobs N]`: a step-by-step passive tree
+  plan. Each step is the best point-neutral swap (take a node with its path,
+  drop the same number of points), applied, then the next step searches the
+  improved tree. Scored on the realistic build: the build with every
+  condition not kept removed from its config (`pob::config_xml::without_inputs`).
+- Per step: screen every unallocated node within `--max-distance` points and
+  every allocated node with its dependents using PoB's own node calculator
+  (behind its power report), split over the pool; pair the 32 best additions
+  (gain per point) with the cheapest point-equal, non-overlapping removal set
+  from the 24 cheapest removals; screen the pairs together; try the 8 best
+  exactly (`Engine::try_tree`: DeallocNode/AllocNode as clicking in PoB, full
+  recalculation, restore from PoB's undo state). A step is taken only if the
+  exact result gains ≥ 0.1% on the goal, the point count is unchanged and PoB
+  raises no new warning. The improved build is then reloaded fresh in a
+  worker (what importing it into PoB gives) and every later engine must
+  reproduce it.
+- `--export` writes the final tree as a PoB code.
+- Engine: persistent `pob::Pool` (long-lived engines on their own threads,
+  build reloaded only when it changes, stats checked against the caller's
+  expectation on every call, original state checked after every share of
+  work). Replaces the per-call `Engine::map`. `realistic` uses it too.
+- Restore check now compares a canonical form: PoB writes allocated nodes in
+  hash-table order, so after an undo the same nodes can be listed in another
+  order (`nodes`, `intNodes`, … and the tree URL). Node lists are sorted and
+  tree URLs dropped; every other character, every stat included, must match.
+- Removals only come from the main tree: weapon-set passives have their own
+  point budgets in PoE2 (found when every early plan was rejected by PoB with
+  "You have 4 Weapon set 2 passives available").
+
+**What was tested**
+- 25 engine/library tests and 8 CLI tests pass (new: a tree trial adds and
+  removes what it should at equal points and restores exactly; pool results
+  equal sequential ones and a wrong expectation is refused; removal pairing
+  matches points exactly, never overlaps and avoids the path; node text).
+- `doctor verify`: 34 exact, 0 failed.
+- End to end on the 0.5.5 Shaman fixture: 5 steps, realistic DPS 87,326 →
+  151,156 (+73.1%) with EHP +1.5% and smallest max hit +1.7%; the exported
+  code, checked with `doctor check` in a fresh process, reproduces all 105
+  saved stats exactly. With 4 conditions kept: 3 steps, 165,252 → 222,768
+  (+34.8%), one step trading −1.8% EHP for +4.2% DPS, shown as such.
+- Observed: on these builds PoB's fast node calculator agreed with the exact
+  recalculation to two decimals for every tried pair. Not relied on; exact
+  trials remain the only numbers shown.
+
+**Limitations**
+- Greedy: each step is the best swap found, not a global optimum (the tree
+  optimiser is the global version). Steps are only as good as `--keep`.
+- Speed: ~21 s per step on 4 cores (~10 s expected on 8), dominated by
+  screening ~1,000 additions per step. Re-screening only what a step changes
+  would cut this; not done yet.
+- New path attribute nodes take PoB's default attribute choice.
+- Not covered yet: support gems, gear, jewels, ascendancy.
+
 ## 2026-11-19: Realistic numbers (`doctor realistic`)
 
 **What changed**

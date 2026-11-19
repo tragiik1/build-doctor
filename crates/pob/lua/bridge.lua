@@ -162,13 +162,37 @@ local loadedXml -- PoB's settled output for the loaded build, unmodified
 -- leak into later numbers.
 local dirty = false
 
+-- PoB keeps allocated nodes in hash tables, so after a tree what-if is
+-- undone the same nodes can be written in a different order (in every
+-- "…nodes" list, e.g. nodes, intNodes, and in the tree URL that encodes them). The canonical form sorts node lists
+-- and drops tree URLs; everything else, every stat included, must match
+-- character for character.
+local function canonical(xml)
+	xml = xml:gsub('(%a*[Nn]odes)="([%d,]*)"', function(name, list)
+		local ids = { }
+		for id in list:gmatch("%d+") do ids[#ids + 1] = tonumber(id) end
+		table.sort(ids)
+		return name .. '="' .. table.concat(ids, ",") .. '"'
+	end)
+	return (xml:gsub("https://www%.pathofexile%.com/passive%-skill%-tree/[%w%-_=]*", "<tree url>"))
+end
+
 local function ensureOriginal()
 	if not dirty then
 		return
 	end
 	local restored = bd_settle()
-	if restored ~= loadedXml then
-		error("PoB did not return to the build's original state after a what-if", 0)
+	if restored ~= loadedXml and canonical(restored or "") ~= canonical(loadedXml or "") then
+		local a, b = { }, { }
+		for line in canonical(loadedXml or ""):gmatch("[^\n]+") do a[#a + 1] = line end
+		for line in canonical(restored or ""):gmatch("[^\n]+") do b[#b + 1] = line end
+		local diffs = { }
+		for i = 1, math.max(#a, #b) do
+			if a[i] ~= b[i] and #diffs < 3 then
+				diffs[#diffs + 1] = (a[i] or ""):gsub("^%s+", ""):sub(1, 160) .. " -> " .. (b[i] or ""):gsub("^%s+", ""):sub(1, 160)
+			end
+		end
+		error("PoB did not return to the build's original state after a what-if: " .. table.concat(diffs, " | "), 0)
 	end
 	dirty = false
 end
@@ -307,6 +331,194 @@ end
 
 function bd_loaded_xml()
 	return loadedXml
+end
+
+---------------------------------------------------------------------------
+-- Passive tree
+---------------------------------------------------------------------------
+
+-- PoB's own warnings for the current calculation (unmet attribute
+-- requirements, negative Spirit, too many points, …), as its sidebar shows.
+local function currentWarnings()
+	local out = { }
+	for _, line in ipairs(build.controls.warnings and build.controls.warnings.lines or { }) do
+		out[#out + 1] = StripEscapes(tostring(line))
+	end
+	return out
+end
+
+function bd_warnings()
+	ensureOriginal()
+	return currentWarnings()
+end
+
+-- Normal passive points spent (what the point budget and auto-level use).
+local function normalPoints()
+	local used, _, _, _, ws1, ws2 = build.spec:CountAllocNodes()
+	return used - math.min(ws1 or 0, ws2 or 0)
+end
+
+-- The numbers a ranking needs, from one calculator output table.
+local function summarise(output)
+	local minHit
+	for _, t in ipairs({ "Physical", "Fire", "Cold", "Lightning", "Chaos" }) do
+		local v = output[t .. "MaximumHitTaken"]
+		if v and (not minHit or v < minHit) then
+			minHit = v
+		end
+	end
+	return {
+		fullDps = output.FullDPS or 0,
+		combinedDps = output.CombinedDPS or 0,
+		minionDps = output.Minion and output.Minion.CombinedDPS or 0,
+		ehp = output.TotalEHP or 0,
+		minHit = minHit or 0,
+	}
+end
+
+local function isTreeCandidate(node)
+	return node.type ~= "ClassStart" and node.type ~= "AscendClassStart" and node.type ~= "Socket"
+		and not node.ascendancyName and not node.isFreeAllocate and not node.isAttribute
+		and node.modKey ~= nil and node.modKey ~= ""
+end
+
+-- A node as the Rust side sees it: id, name, type and its stat lines.
+local function nodeInfo(node)
+	local stats = { }
+	for _, line in ipairs(node.sd or { }) do
+		stats[#stats + 1] = StripEscapes(tostring(line))
+	end
+	return { id = node.id, name = node.dn, kind = node.type, stats = stats }
+end
+
+-- Weapon set passives (allocMode 1 or 2) have their own point budgets in
+-- PoE2, so a swap only ever frees points from the shared main tree.
+local function mainTreeOnly(nodes)
+	for _, node in ipairs(nodes) do
+		if (node.allocMode or 0) ~= 0 then
+			return false
+		end
+	end
+	return true
+end
+
+local function nodeIds(list)
+	local ids = { }
+	for _, node in ipairs(list) do
+		ids[#ids + 1] = node.id
+	end
+	return ids
+end
+
+-- Screening with PoB's own node calculator (the one behind its power
+-- report): every unallocated node within `maxDistance` points, allocated
+-- along its path, and every allocated node removed with the nodes that
+-- depend on it. Fast and approximate (PoB reuses cached skill results);
+-- anything recommended is re-checked exactly with bd_try_tree.
+--
+-- `part` and `parts` split the work between engines: this call screens the
+-- nodes whose position in id order is `part` modulo `parts`.
+function bd_tree_screen(maxDistance, part, parts)
+	ensureOriginal()
+	local spec = build.spec
+	local calcFunc, baseOutput = build.calcsTab:GetMiscCalculator()
+	local granted = build.calcsTab.mainEnv.grantedPassives or { }
+	local ids = { }
+	for id in pairs(spec.nodes) do ids[#ids + 1] = id end
+	table.sort(ids)
+	local adds, removes = { }, { }
+	for index, id in ipairs(ids) do
+		local node = spec.nodes[id]
+		if (index - 1) % parts == part and isTreeCandidate(node) and not granted[id] then
+			if not node.alloc and node.path and node.pathDist and node.pathDist <= maxDistance then
+				local path = { }
+				for _, pathNode in ipairs(node.path) do
+					path[pathNode] = true
+				end
+				adds[#adds + 1] = {
+					node = nodeInfo(node),
+					nodes = nodeIds(node.path), cost = #node.path,
+					out = summarise(calcFunc({ addNodes = path }, true)),
+				}
+			elseif node.alloc and node.depends and #node.depends > 0 and mainTreeOnly(node.depends) then
+				local remove, cost = { }, 0
+				for _, dep in ipairs(node.depends) do
+					remove[dep] = true
+					if not dep.ascendancyName and dep.type ~= "ClassStart" then
+						cost = cost + 1
+					end
+				end
+				removes[#removes + 1] = {
+					node = nodeInfo(node),
+					nodes = nodeIds(node.depends), cost = cost,
+					out = summarise(calcFunc({ removeNodes = remove }, true)),
+				}
+			end
+		end
+	end
+	return { base = summarise(baseOutput), adds = adds, removes = removes }
+end
+
+-- Screens one combined change with PoB's node calculator.
+function bd_tree_screen_change(removeIds, addIds)
+	ensureOriginal()
+	local spec = build.spec
+	local calcFunc = build.calcsTab:GetMiscCalculator()
+	local add, remove = { }, { }
+	for _, id in ipairs(addIds) do add[spec.nodes[id]] = true end
+	for _, id in ipairs(removeIds) do remove[spec.nodes[id]] = true end
+	return summarise(calcFunc({ addNodes = add, removeNodes = remove }, true))
+end
+
+-- Applies a tree change exactly as clicking in PoB would (DeallocNode for
+-- each removal, then AllocNode for each target along PoB's own path), lets
+-- PoB recalculate fully, and returns its saved output together with what
+-- actually changed. The tree is then restored from PoB's undo state; the
+-- byte-identical check in ensureOriginal guards everything after.
+function bd_try_tree(removeIds, addIds)
+	ensureOriginal()
+	local spec = build.spec
+	local undo = spec:CreateUndoState()
+	local before = { }
+	for id in pairs(spec.allocNodes) do before[id] = true end
+	local pointsBefore = normalPoints()
+	local warningsBefore = { }
+	for _, w in ipairs(currentWarnings()) do warningsBefore[w] = true end
+
+	dirty = true
+	local ok, result = pcall(function()
+		for _, id in ipairs(removeIds) do
+			local node = spec.nodes[id]
+			if node and node.alloc then spec:DeallocNode(node) end
+		end
+		for _, id in ipairs(addIds) do
+			local node = spec.nodes[id]
+			if node and not node.alloc then spec:AllocNode(node) end
+		end
+		local added, removed = { }, { }
+		for id, node in pairs(spec.allocNodes) do
+			if not before[id] then added[#added + 1] = nodeInfo(node) end
+		end
+		for id in pairs(before) do
+			if not spec.allocNodes[id] then
+				removed[#removed + 1] = nodeInfo(spec.nodes[id])
+			end
+		end
+		local pointsAfter = normalPoints()
+		local xml, passes = bd_settle()
+		local newWarnings = { }
+		for _, w in ipairs(currentWarnings()) do
+			if not warningsBefore[w] then newWarnings[#newWarnings + 1] = w end
+		end
+		return { xml = xml, passes = passes, added = added, removed = removed,
+			pointsBefore = pointsBefore, pointsAfter = pointsAfter, newWarnings = newWarnings }
+	end)
+	spec:RestoreUndoState(undo)
+	build.buildFlag = true
+	if not ok then
+		error(result, 0)
+	end
+	return result
 end
 
 -- Mod lines on equipped items and socketed jewels that PoB cannot parse

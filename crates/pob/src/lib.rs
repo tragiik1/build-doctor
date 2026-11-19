@@ -11,13 +11,17 @@
 //! - [`code`]: PoB build codes (`base64url(zlib(xml))`).
 
 pub mod code;
+pub mod config_xml;
 mod engine;
 mod error;
 mod install;
 mod pool;
 mod stats;
+mod tree;
 
 pub use engine::{Assumption, AssumptionKind, Calculation, Engine, Identity, UnsupportedMod};
 pub use error::{Error, Result};
 pub use install::{Install, PobVersion};
+pub use pool::Pool;
 pub use stats::{Stat, StatDiff, StatKind, StatSheet};
+pub use tree::{NodeRef, Summary, TreeOption, TreeScreen, TreeTrial};

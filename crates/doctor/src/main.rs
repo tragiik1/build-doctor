@@ -1,10 +1,12 @@
 //! `doctor`: Path of Exile 2 build doctor.
 
 mod check;
+mod conditions;
 mod data_dir;
 mod fixtures;
 mod input;
 mod realistic;
+mod todo;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -60,6 +62,34 @@ enum Command {
         pob: String,
         /// PoB engines to run in parallel (about 300 MB each). Defaults to
         /// the number of CPU cores, at most 8.
+        #[arg(long)]
+        jobs: Option<usize>,
+    },
+
+    /// The ranked to-do list: changes that improve the build most, each
+    /// applied and recalculated exactly by PoB. Covers the passive tree.
+    Todo {
+        /// A PoB code, a path to a code or XML file, or a build link.
+        build: String,
+        /// What to improve.
+        #[arg(long, value_enum, default_value = "damage")]
+        goal: todo::Goal,
+        /// Combat conditions you really sustain (as in `doctor realistic`);
+        /// all others are removed before scoring. Repeatable.
+        #[arg(long)]
+        keep: Vec<String>,
+        /// Consider nodes up to this many points away.
+        #[arg(long, default_value_t = 6)]
+        max_distance: u32,
+        /// At most this many steps.
+        #[arg(long, default_value_t = 5)]
+        steps: usize,
+        /// Write the final tree as a PoB code to this file.
+        #[arg(long)]
+        export: Option<PathBuf>,
+        #[arg(long, default_value = PINNED_POB)]
+        pob: String,
+        /// PoB engines to run in parallel (about 300 MB each).
         #[arg(long)]
         jobs: Option<usize>,
     },
@@ -179,6 +209,28 @@ fn run(cli: Cli) -> AnyResult<ExitCode> {
             let xml = input::read_build(&build)?;
             let jobs = jobs.unwrap_or_else(default_jobs).max(1);
             return realistic::run(&install, &xml, &keep, jobs);
+        }
+        Command::Todo {
+            build,
+            goal,
+            keep,
+            max_distance,
+            steps,
+            export,
+            pob,
+            jobs,
+        } => {
+            let install = data.install(&pob)?;
+            let xml = input::read_build(&build)?;
+            let options = todo::Options {
+                keep,
+                goal,
+                jobs: jobs.unwrap_or_else(default_jobs).max(1),
+                max_distance,
+                steps,
+                export,
+            };
+            return todo::run(&install, &xml, &options);
         }
         Command::Verify { fixtures, sweep } => {
             return fixtures::verify(&data, &fixtures, sweep);

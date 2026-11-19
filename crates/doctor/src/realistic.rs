@@ -11,10 +11,11 @@
 use std::process::ExitCode;
 use std::time::Instant;
 
-use pob::{AssumptionKind, Engine, Install, StatKind, StatSheet};
+use pob::{AssumptionKind, Install, Pool, StatKind, StatSheet};
 
 use crate::AnyResult;
 use crate::check::{describe_build, format_number};
+use crate::conditions::{self, Inspected, Keep};
 
 /// A number the report tracks. Damage metrics first, then survival.
 #[derive(Debug, Clone, Copy)]
@@ -97,10 +98,12 @@ struct Row {
 
 pub fn run(install: &Install, xml: &str, keep: &[String], jobs: usize) -> AnyResult<ExitCode> {
     let started = Instant::now();
-    let engine = Engine::start(install)?;
-    let base = engine.load(xml)?;
-    let id = engine.identity()?;
-    let assumptions = engine.assumptions()?;
+    let pool = Pool::new(install, jobs)?;
+    let Inspected {
+        id,
+        assumptions,
+        calc: base,
+    } = conditions::inspect(&pool, xml)?;
 
     // Only metrics this build actually produces.
     let metrics: Vec<Metric> = DAMAGE
@@ -113,31 +116,12 @@ pub fn run(install: &Install, xml: &str, keep: &[String], jobs: usize) -> AnyRes
         return Err("PoB produced no damage or survival numbers for this build".into());
     }
 
-    let (conditions, scenario): (Vec<_>, Vec<_>) = assumptions
+    let conditions = conditions::conditions(&assumptions);
+    let scenario: Vec<_> = assumptions
         .iter()
-        .partition(|a| a.kind == AssumptionKind::Condition);
-
-    let keep_lower: Vec<String> = keep.iter().map(|k| k.to_lowercase()).collect();
-    for (pattern, original) in keep_lower.iter().zip(keep) {
-        if !conditions
-            .iter()
-            .any(|c| c.label.to_lowercase().contains(pattern))
-        {
-            return Err(format!(
-                "--keep {original:?} matches no condition of this build. Conditions: {}",
-                conditions
-                    .iter()
-                    .map(|c| c.label.as_str())
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            )
-            .into());
-        }
-    }
-    let kept = |label: &str| {
-        let label = label.to_lowercase();
-        keep_lower.iter().any(|p| label.contains(p))
-    };
+        .filter(|a| a.kind == AssumptionKind::Scenario)
+        .collect();
+    let keep = Keep::new(keep, &conditions)?;
 
     let change = |metric: Metric, stats: &StatSheet| -> Option<f64> {
         let before = metric.value(&base.stats)?;
@@ -150,19 +134,19 @@ pub fn run(install: &Install, xml: &str, keep: &[String], jobs: usize) -> AnyRes
     };
 
     // Each condition switched off on its own, then all of them, then all but
-    // the kept ones. Spread over `jobs` engines; each must agree with this one.
+    // the kept ones.
     let mut runs: Vec<Vec<String>> = conditions.iter().map(|c| vec![c.var.clone()]).collect();
     runs.push(conditions.iter().map(|c| c.var.clone()).collect());
     if !keep.is_empty() {
         runs.push(
             conditions
                 .iter()
-                .filter(|c| !kept(&c.label))
+                .filter(|c| !keep.keeps(&c.label))
                 .map(|c| c.var.clone())
                 .collect(),
         );
     }
-    let mut results = engine.map(xml, jobs.saturating_sub(1), runs, |engine, vars| {
+    let mut results = pool.map(xml, Some(&base.stats), runs, |engine, vars| {
         let vars: Vec<&str> = vars.iter().map(String::as_str).collect();
         engine.without_config(&vars).map(|calc| calc.stats)
     })?;
@@ -184,7 +168,7 @@ pub fn run(install: &Install, xml: &str, keep: &[String], jobs: usize) -> AnyRes
         "PoB2 {}, {} conditions tested on {} engines in {:.1}s",
         install.version(),
         conditions.len(),
-        jobs.clamp(1, conditions.len() + 2),
+        pool.size(),
         started.elapsed().as_secs_f64()
     );
     println!();
@@ -242,7 +226,11 @@ pub fn run(install: &Install, xml: &str, keep: &[String], jobs: usize) -> AnyRes
     }
     println!();
     for row in &moving {
-        let mark = if kept(&row.label) { "kept " } else { "     " };
+        let mark = if keep.keeps(&row.label) {
+            "kept "
+        } else {
+            "     "
+        };
         let label = if row.value == "yes" {
             row.label.clone()
         } else {

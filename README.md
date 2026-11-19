@@ -27,6 +27,9 @@ doctor check <...> --all              # every stat PoB produced, exactly as PoB 
 doctor realistic <build>              # numbers without the combat conditions the build assumes
 doctor realistic <build> --keep shocked --keep "skill recently"
                                       # ...keeping only the ones you really sustain
+doctor todo <build> [--keep …]        # passive tree plan: best point-neutral swaps, step by step
+doctor todo <build> --goal survival --export plan.pob
+                                      # ...for survival, final tree saved as a PoB code
 doctor verify                         # precision gate over fixtures/
 doctor verify --sweep                 # which PoB releases reproduce which fixtures
 ```
