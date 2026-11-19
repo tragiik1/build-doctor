@@ -179,6 +179,19 @@ mod tests {
     }
 
     #[test]
+    fn changed_lines_shows_only_differences() {
+        let before = "<a>\n  <Stat value=\"1\"/>\nsame\n{rune}+95 to Spirit";
+        let after = "<a>\n  <Stat value=\"2\"/>\nsame\n{rune}+181 to Spirit";
+        assert_eq!(
+            changed_lines(before, after),
+            [
+                "<Stat value=\"1\"/> -> <Stat value=\"2\"/>",
+                "{rune}+95 to Spirit -> {rune}+181 to Spirit"
+            ]
+        );
+    }
+
+    #[test]
     #[ignore = "needs a PoB2 install in DOCTOR_POB_DIR"]
     fn sandbox_blocks_side_effects() {
         let engine = engine();

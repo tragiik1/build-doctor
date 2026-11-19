@@ -44,10 +44,20 @@ fixture builds yet, so public builds are used.
   results); unparseable XML is a reported error.
 - 14 unit tests (code decode/encode, SHA-1 rule, manifest filtering and path
   traversal, stat diffing, links, number formatting).
-- Load time per build 0.5 to 2.4 s (load and settle, release build). Not yet
-  measured: the per-change what-if cost on real builds (needed for M2).
-- Not run here: `doctor engine install`, because GitHub archive downloads are
-  blocked by this container's proxy. CI exercises it. Windows only runs in CI.
+- Load time per build 0.5 to 2.4 s (load and settle, release build).
+- What-if cost on real builds (Lua spike, one core, PoB's own
+  `GetMiscCalculator`): full recalc 69–78 ms; add one node 16–17 ms; remove one
+  node 9–10 ms. On an 8-core PC that is about 500 what-ifs per second, so
+  ranking every node within 5 points takes about a second, and a tree search of
+  tens of thousands of evaluations takes under a minute.
+- `doctor engine install --archive` on a `git archive` of v0.23.1 (same layout
+  as GitHub's zip): installs 53 MB, verifies, and the gate passes on it. The
+  download itself is blocked by this container's proxy; CI exercises it.
+- CI run 1: Windows and Linux both compiled (LuaJIT and lua-utf8 under MSVC)
+  and passed unit tests; install failed because PoB's manifest omits
+  `src/HeadlessWrapper.lua` (PoB's `manifest.cfg` excludes it). Fixed: the
+  installer takes it (and `_SimpleGraphic.def.lua` when present) from the same
+  archive and records its SHA-1 in `unlisted.sha1` for `engine verify`.
 
 **Findings**
 - **PoB2 bug (0.22.0 up to current dev/beta):** with Darkness Enthroned ("91%

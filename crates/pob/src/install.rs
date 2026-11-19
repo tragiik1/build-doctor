@@ -21,6 +21,16 @@ use crate::{Error, Result};
 
 const REPOSITORY: &str = "PathOfBuildingCommunity/PathOfBuilding-PoE2";
 
+/// Files the engine needs that PoB's manifest deliberately leaves out (its
+/// installer excludes them; see PoB2's `manifest.cfg`). They are taken from
+/// the same archive and their SHA-1 is recorded in [`UNLISTED_RECORD`] at
+/// install time, so `verify` still detects later changes. The first one is
+/// required; the rest are extracted when the release has them.
+const UNLISTED_FILES: &[&str] = &["src/HeadlessWrapper.lua", "src/_SimpleGraphic.def.lua"];
+
+/// `<sha1>  <path>` lines for [`UNLISTED_FILES`], written by `download`.
+const UNLISTED_RECORD: &str = "unlisted.sha1";
+
 /// Images and textures are only used for drawing; the calculation never reads them.
 const SKIPPED_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "dds", "zst", "ttf", "ico"];
 
@@ -84,10 +94,16 @@ impl Install {
         Ok(Self { root, version })
     }
 
-    /// Re-hashes every kept file against the manifest.
+    /// Re-hashes every kept file against the manifest, plus the unlisted
+    /// engine files against the hashes recorded when they were installed.
     pub fn verify(&self) -> Result<()> {
         let manifest = parse_manifest(&read_file(&self.root.join("manifest.xml"))?)?;
-        for file in &manifest.files {
+        let mut files = manifest.files;
+        let record = self.root.join(UNLISTED_RECORD);
+        if record.is_file() {
+            files.extend(parse_unlisted_record(&read_file(&record)?)?);
+        }
+        for file in &files {
             let path = self.root.join(&file.path);
             let bytes = fs::read(&path).map_err(|e| Error::io("read", &path, e))?;
             check_hash(&file.path, &bytes, &file.sha1)?;
@@ -103,12 +119,14 @@ impl Install {
         let archive_path = parent.join(format!(".download-{tag}.zip"));
         let url = format!("https://codeload.github.com/{REPOSITORY}/zip/refs/tags/{tag}");
         fetch_to_file(&url, &archive_path)?;
-        let result = Self::extract(&archive_path, parent);
+        let result = Self::from_archive(&archive_path, parent);
         let _ = fs::remove_file(&archive_path);
         result
     }
 
-    fn extract(archive_path: &Path, parent: &Path) -> Result<Self> {
+    /// Installs from a PoB2 source archive already on disk (the zip GitHub
+    /// serves for a release tag), with the same verification as `download`.
+    pub fn from_archive(archive_path: &Path, parent: &Path) -> Result<Self> {
         let file = fs::File::open(archive_path).map_err(|e| Error::io("open", archive_path, e))?;
         let mut zip =
             zip::ZipArchive::new(file).map_err(|e| Error::Download(format!("bad archive: {e}")))?;
@@ -138,6 +156,18 @@ impl Install {
             write_file(&staging.join(&file.path), &bytes)?;
         }
         write_file(&staging.join("manifest.xml"), manifest_text.as_bytes())?;
+
+        let mut record = String::new();
+        for (i, path) in UNLISTED_FILES.iter().enumerate() {
+            let name = format!("{prefix}{path}");
+            if i > 0 && zip.by_name(&name).is_err() {
+                continue;
+            }
+            let bytes = read_zip_entry(&mut zip, &name)?;
+            record.push_str(&format!("{}  {path}\n", pob_sha1(&bytes)));
+            write_file(&staging.join(path), &bytes)?;
+        }
+        write_file(&staging.join(UNLISTED_RECORD), record.as_bytes())?;
 
         let root = parent.join(manifest.version.as_str());
         if root.exists() {
@@ -208,6 +238,26 @@ fn parse_manifest(text: &str) -> Result<Manifest> {
         version: PobVersion(version.to_owned()),
         files,
     })
+}
+
+fn parse_unlisted_record(text: &str) -> Result<Vec<ManifestFile>> {
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|line| {
+            let (sha1, path) = line
+                .split_once("  ")
+                .ok_or_else(|| Error::Corrupt(format!("{UNLISTED_RECORD}: bad line {line:?}")))?;
+            if !UNLISTED_FILES.contains(&path) {
+                return Err(Error::Corrupt(format!(
+                    "{UNLISTED_RECORD}: unexpected path {path}"
+                )));
+            }
+            Ok(ManifestFile {
+                path: path.to_owned(),
+                sha1: sha1.to_owned(),
+            })
+        })
+        .collect()
 }
 
 fn is_skipped(name: &str) -> bool {
@@ -340,6 +390,16 @@ mod tests {
                 "runtime/lua/xml.lua"
             ]
         );
+    }
+
+    #[test]
+    fn unlisted_record_round_trips_and_rejects_strangers() {
+        let files = parse_unlisted_record("abc  src/HeadlessWrapper.lua\n").unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "src/HeadlessWrapper.lua");
+        assert_eq!(files[0].sha1, "abc");
+        assert!(parse_unlisted_record("abc  src/Evil.lua\n").is_err());
+        assert!(parse_unlisted_record("no-separator\n").is_err());
     }
 
     #[test]

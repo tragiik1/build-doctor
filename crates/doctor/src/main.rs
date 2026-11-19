@@ -65,6 +65,10 @@ enum EngineCommand {
     Install {
         #[arg(long, default_value = PINNED_POB)]
         version: String,
+        /// Install from a release zip already on disk instead of downloading
+        /// (the "Source code (zip)" of a PoB2 GitHub release).
+        #[arg(long, conflicts_with = "version")]
+        archive: Option<PathBuf>,
     },
     /// List installed PoB2 versions.
     List,
@@ -91,10 +95,15 @@ type AnyResult<T> = Result<T, Box<dyn std::error::Error>>;
 fn run(cli: Cli) -> AnyResult<ExitCode> {
     let data = data_dir::DataDir::new(cli.data_dir)?;
     match cli.command {
-        Command::Engine(EngineCommand::Install { version }) => {
-            let tag = format!("v{}", version.trim_start_matches('v'));
-            println!("Downloading PoB2 {tag} into {}", data.pob_dir().display());
-            let install = pob::Install::download(&tag, &data.pob_dir())?;
+        Command::Engine(EngineCommand::Install { version, archive }) => {
+            let install = match archive {
+                Some(zip) => pob::Install::from_archive(&zip, &data.pob_dir())?,
+                None => {
+                    let tag = format!("v{}", version.trim_start_matches('v'));
+                    println!("Downloading PoB2 {tag} into {}", data.pob_dir().display());
+                    pob::Install::download(&tag, &data.pob_dir())?
+                }
+            };
             println!(
                 "Installed and verified PoB2 {} at {}",
                 install.version(),
