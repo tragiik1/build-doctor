@@ -591,6 +591,38 @@ mod tests {
         assert!(err.to_string().contains("cannot read"), "{err}");
     }
 
+    /// An item as the game copies it: PoB reads it, finds the slots it fits,
+    /// equips it with a real effect, and the build is restored afterwards.
+    #[test]
+    #[ignore = "needs a PoB2 install in DOCTOR_POB_DIR"]
+    fn item_what_if_equips_and_restores() {
+        let engine = engine();
+        let base = engine.load(&fixture("maxroll_gd79010q.xml")).unwrap();
+        let ring = "Item Class: Rings\nRarity: Rare\nGrim Coil\nSapphire Ring\n--------\n\
+            Item Level: 75\n--------\n+24% to Cold Resistance (implicit)\n--------\n\
+            +85 to maximum Life\n+12% to Chaos Resistance\nGains the power of a forgotten god\n";
+        let info = engine.item_info(ring).unwrap();
+        assert_eq!(info.name, "Grim Coil, Sapphire Ring");
+        assert_eq!(info.unread, ["Gains the power of a forgotten god"]);
+        let slots: Vec<&str> = info.slots.iter().map(|s| s.slot.as_str()).collect();
+        assert_eq!(slots, ["Ring 1", "Ring 2"]);
+
+        let (calc, _) = engine.with_item(ring, "Ring 1").unwrap();
+        assert_ne!(base.stats.diff(&calc.stats), []);
+        let restored = engine.ensure_original().unwrap();
+        let restored = StatSheet::from_build_xml(&restored).unwrap();
+        assert_eq!(base.stats.diff(&restored), []);
+
+        assert!(engine.with_item(ring, "Helmet").is_err());
+        for text in [
+            "not an item",
+            "Item Class: RingsRarity: RareGrim CoilSapphire Ring--------",
+        ] {
+            let err = engine.item_info(text).unwrap_err().to_string();
+            assert!(err.contains("cannot read this item"), "{err}");
+        }
+    }
+
     #[test]
     #[ignore = "needs a PoB2 install in DOCTOR_POB_DIR"]
     fn lists_mods_pob_cannot_parse() {

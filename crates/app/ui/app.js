@@ -8,9 +8,11 @@ const state = {
   engine: null,          // { installed, pinned }
   busy: null,            // { title, detail, progress: 0..1 | null }
   error: null,
-  view: "overview",      // overview | realistic | plan
+  view: "diagnosis",     // diagnosis | item | plan | realistic | stats
   overview: null,
   diagnosis: null,       // { status: "running" | "done" | "error", result, error }
+  itemText: "",
+  itemCheck: null,
   loadSeq: 0,            // which load a running diagnosis belongs to
   kept: new Set(),       // condition vars the player keeps up
   realistic: null,
@@ -145,7 +147,8 @@ async function loadBuild(input) {
   state.realistic = null;
   state.realisticKept = null;
   state.plan = null;
-  state.view = "overview";
+  state.itemCheck = null;
+  state.view = "diagnosis";
   render();
 }
 
@@ -161,6 +164,16 @@ async function runDiagnosis() {
     if (seq === state.loadSeq) state.diagnosis = { status: "error", error: String(err) };
   }
   if (seq === state.loadSeq) render();
+}
+
+async function checkItem() {
+  const item = (document.getElementById("item-paste")?.value ?? "").trim();
+  if (!item) return;
+  state.itemText = item;
+  state.itemCheck = null;
+  const result = await run("Checking the item", "Path of Building equips it in each slot it fits and recalculates your build.", () => invoke("check_item", { item }));
+  if (result) state.itemCheck = result;
+  render();
 }
 
 async function runRealistic() {
@@ -245,7 +258,7 @@ function renderStart() {
     <div class="start"><div class="start-card">
       <div class="wordmark">Build <span>Doctor</span></div>
       <h1>Load a build</h1>
-      <p>Paste a Path of Building code, or a pobb.in, poe.ninja, maxroll or poe2db link.</p>
+      <p>Paste a Path of Building code, or a pobb.in, poe.ninja, maxroll or poe2db link. You get a diagnosis first: what to fix, each fix measured by Path of Building.</p>
       <textarea class="paste" id="paste" spellcheck="false" placeholder="Paste here" ${state.busy || !ready ? "disabled" : ""}></textarea>
       <div class="start-actions">
         <span class="engine-line">${engineLine}${state.app ? ` · ${versionLabel()}` : ""}</span>
@@ -272,10 +285,13 @@ function renderBusy() {
 function renderRail() {
   const b = state.overview.build;
   const conditions = state.overview.assumptions.filter((a) => a.kind === "condition").length;
+  const findings = state.diagnosis?.status === "done" ? state.diagnosis.result.findings.filter((f) => f.severity !== "note").length : null;
   const nav = [
-    ["overview", "Overview", ""],
-    ["realistic", "Realistic numbers", conditions ? `${conditions}` : ""],
-    ["plan", "Passive tree plan", state.plan ? `${state.plan.steps.length} steps` : ""],
+    ["diagnosis", "Diagnosis", "What to fix first", findings ? `${findings}` : ""],
+    ["item", "Check an item", "Is it an upgrade?", ""],
+    ["plan", "Passive tree plan", "Free gains from respecs", state.plan ? `${state.plan.steps.length} steps` : ""],
+    ["realistic", "Realistic numbers", "Without assumed buffs", conditions ? `${conditions}` : ""],
+    ["stats", "Stats", "Every number PoB calculated", ""],
   ];
   return `
     <aside class="rail">
@@ -286,7 +302,7 @@ function renderRail() {
         <div class="meta">${esc(b.mainSkill ?? "")}</div>
       </div>
       <nav class="nav">
-        ${nav.map(([id, label, note]) => `<button class="${state.view === id ? "active" : ""}" data-view="${id}">${label}<small>${esc(note)}</small></button>`).join("")}
+        ${nav.map(([id, label, hint, note]) => `<button class="${state.view === id ? "active" : ""}" data-view="${id}"><span class="nav-text">${label}<span class="hint">${hint}</span></span><small>${esc(note)}</small></button>`).join("")}
       </nav>
       <div class="rail-foot">
         ${renderUpdate()}
@@ -302,7 +318,9 @@ function renderView() {
   const error = state.error ? `<div class="error">${esc(state.error)}</div>` : "";
   if (state.view === "realistic") return renderRealistic() + busy + error;
   if (state.view === "plan") return renderPlan() + error;
-  return renderOverview() + error;
+  if (state.view === "item") return renderItem() + error;
+  if (state.view === "stats") return renderStats() + error;
+  return renderDiagnosisPage() + error;
 }
 
 function stat(group, name) {
@@ -310,7 +328,9 @@ function stat(group, name) {
   return null;
 }
 
-function renderOverview() {
+// The landing page: can the numbers be trusted, the key numbers, what to
+// fix first, and where to go next.
+function renderDiagnosisPage() {
   const o = state.overview;
   const full = stat("Offence", "FullDPS");
   const dmg = full ?? stat("Offence", "CombinedDPS");
@@ -324,21 +344,15 @@ function renderOverview() {
     ? ""
     : r.differences.length === 0
       ? `<div class="verdict ok"><strong>Exact</strong><span class="muted">All ${r.saved} numbers saved in this build reproduced by Path of Building ${esc(o.build.pobVersion)}.</span></div>`
-      : `<div class="verdict warn"><strong>${r.differences.length} of ${r.saved} saved numbers differ</strong><span class="muted">The build was probably saved by a different Path of Building version. The numbers below are ${esc(o.build.pobVersion)}'s.</span></div>`;
+      : `<div class="verdict warn"><strong>${r.differences.length} of ${r.saved} saved numbers differ</strong><span class="muted">The build was probably saved by a different Path of Building version. Every number here is ${esc(o.build.pobVersion)}'s.</span></div>`;
   const outdated = o.build.treeOutdated
     ? `<div class="verdict warn"><strong>Old passive tree</strong><span class="muted">This build uses tree ${esc(o.build.treeVersion)}; the newest is ${esc(o.build.latestTreeVersion)}. Numbers describe the older game version.</span></div>`
     : "";
 
-  const conditions = o.assumptions.filter((a) => a.kind === "condition");
-  const scenario = o.assumptions.filter((a) => a.kind === "scenario" && a.section !== "Quest Rewards");
-  const quests = o.assumptions.filter((a) => a.section === "Quest Rewards");
-  const gear = o.unsupported.filter((m) => !m.usable);
-  const usables = o.unsupported.filter((m) => m.usable);
-
   return `
     <div class="page-head"><div>
-      <h1>Overview</h1>
-      <p>Your build as Path of Building calculates it: what to fix first, then everything the numbers depend on.</p>
+      <h1>Diagnosis</h1>
+      <p>What to fix first. Every fix was applied to your build and recalculated by Path of Building.</p>
     </div></div>
     ${verdict}${outdated}
     <div class="tiles">
@@ -349,6 +363,42 @@ function renderOverview() {
     </div>
     ${renderDiagnosis()}
     ${o.warnings.length && state.diagnosis?.status === "error" ? `<div class="verdict warn"><strong>Path of Building warns</strong><span class="muted">${o.warnings.map(esc).join(" · ")}</span></div>` : ""}
+    ${renderNext()}`;
+}
+
+// Where to go after the diagnosis, with what each page will show for this build.
+function renderNext() {
+  const o = state.overview;
+  const conditions = o.assumptions.filter((a) => a.kind === "condition").length;
+  const rows = [
+    ["item", "Check an item", "Paste an item copied in game with Ctrl+C. Path of Building equips it in each slot it fits and shows exactly what changes."],
+    ["plan", "Passive tree plan", "The best passive swaps for your build, same point count, each one recalculated. Respecs cost only gold."],
+    ["realistic", "Realistic numbers", conditions
+      ? `Your numbers assume ${conditions} combat condition${conditions === 1 ? "" : "s"} (enemy Shocked, recently hit…). See what each is worth and keep only the ones you really sustain.`
+      : "This build assumes no combat conditions, so its numbers are already the realistic ones."],
+    ["stats", "Stats", "Every number Path of Building calculated, what they assume, and the gear mods it cannot read."],
+  ];
+  return `<div class="panel next">
+    <div class="panel-head"><h2>Next</h2></div>
+    <div class="panel-body">${rows.map(([view, title, text]) => `
+      <button class="next-row" data-view="${view}"><span class="next-title">${title}</span><span class="muted">${text}</span></button>`).join("")}
+    </div>
+  </div>`;
+}
+
+// Everything PoB calculated and everything those numbers depend on.
+function renderStats() {
+  const o = state.overview;
+  const conditions = o.assumptions.filter((a) => a.kind === "condition");
+  const scenario = o.assumptions.filter((a) => a.kind === "scenario" && a.section !== "Quest Rewards");
+  const quests = o.assumptions.filter((a) => a.section === "Quest Rewards");
+  const gear = o.unsupported.filter((m) => !m.usable);
+  const usables = o.unsupported.filter((m) => m.usable);
+  return `
+    <div class="page-head"><div>
+      <h1>Stats</h1>
+      <p>Your build as Path of Building calculates it, with everything those numbers depend on.</p>
+    </div></div>
     <div class="grid cols-2">
       <div class="panel">
         <div class="panel-head"><h2>Stats</h2><span class="meta">Path of Building ${esc(o.build.pobVersion)}</span></div>
@@ -374,6 +424,50 @@ function renderOverview() {
         </div>
       </div>
     </div>`;
+}
+
+// "Is this item an upgrade?"
+function renderItem() {
+  const c = state.itemCheck;
+  const head = `
+    <div class="page-head"><div>
+      <h1>Check an item</h1>
+      <p>Copy an item in game with Ctrl+C (or from the trade site) and paste it here. Path of Building equips it, exactly as written, in each slot it fits and recalculates your build.</p>
+    </div></div>
+    <div class="panel" style="margin-bottom:16px"><div class="panel-body" style="padding-top:14px">
+      <textarea class="paste item-paste" id="item-paste" spellcheck="false" placeholder="Paste an item here" ${state.busy ? "disabled" : ""}>${esc(state.itemText)}</textarea>
+      <div class="toolbar" style="margin-top:10px">
+        <span class="faint">Ctrl+Enter to check</span>
+        <span class="spacer"></span>
+        <button class="btn primary" data-action="check-item" ${state.busy ? 'aria-disabled="true"' : ""}>Check item</button>
+      </div>
+    </div></div>`;
+  if (state.busy) return head + renderBusy();
+  if (!c) return head;
+  const unread = c.unread.length
+    ? `<div class="verdict warn"><strong>Not counted</strong><span class="muted">Path of Building cannot read ${c.unread.length === 1 ? "this line" : "these lines"}, so no number includes ${c.unread.length === 1 ? "it" : "them"}: ${c.unread.map(esc).join(" · ")}</span></div>`
+    : "";
+  if (!c.slots.length) {
+    return head + unread + `<div class="panel empty">Path of Building found no equipment slot for ${esc(c.item)} in this build. Jewels and weapon-swap slots are not checked yet.</div>`;
+  }
+  const verdicts = {
+    better: ["Better", "pos", "More damage or survival, and less of neither."],
+    worse: ["Worse", "neg", "Less damage or survival, and more of neither."],
+    mixed: ["Trade-off", "warn", "Gains on one side, losses on the other."],
+    same: ["No change", "faint", "Damage and Total EHP stay the same."],
+  };
+  const slots = c.slots.map((s) => {
+    const [word, toneClass, meaning] = verdicts[s.verdict];
+    return `<div class="panel slot-result">
+      <div class="panel-head"><h2>${esc(s.slot)} <span class="faint" style="font-weight:400">instead of ${esc(s.replaces ?? "nothing")}</span></h2><span class="verdict-word ${toneClass}" title="${esc(meaning)}">${word}</span></div>
+      <div class="panel-body">
+        <div class="tiles three">${s.headline.map((e) => `<div class="tile"><div class="label">${esc(e.label)}</div><div class="value">${fmt(e.after)}</div><div class="sub ${tone(e.change)}">${signed(e.change)} <span class="faint">from ${fmt(e.before)}</span></div></div>`).join("")}</div>
+        ${s.newWarnings.length ? `<div class="item-warnings">${s.newWarnings.map((w) => `<div><span class="neg">Path of Building warns</span> ${esc(w)}</div>`).join("")}</div>` : ""}
+        ${s.changes.length ? `<table class="kv changes">${s.changes.map((e) => `<tr><td class="muted">${esc(e.label)}</td><td>${e.percent ? `${fmt(e.before)}% → ${fmt(e.after)}%` : `${fmt(e.before)} → ${fmt(e.after)} <span class="${tone(e.change)}">${signed(e.change)}</span>`}</td></tr>`).join("")}</table>` : ""}
+      </div>
+    </div>`;
+  }).join("");
+  return head + `<div class="item-name">${esc(c.item)}</div>` + unread + `<div class="stack">${slots}</div>`;
 }
 
 function renderDiagnosis() {
@@ -408,11 +502,11 @@ function finding(f) {
     ? `<span>${esc(e.label)} <span class="num">${fmt(e.before)}% → ${fmt(e.after)}%</span></span>`
     : `<span>${esc(e.label)} <span class="num">${fmt(e.before)} → ${fmt(e.after)}</span> <span class="${tone(e.change)}">${signed(e.change)}</span></span>`,
   ).join('<span class="sep">·</span>');
-  return `<li class="finding ${f.severity}">
+  return `<li class="finding is-${f.severity}">
     <span class="tag">${tag}</span>
     <div>
       <div class="title selectable">${esc(f.title)}</div>
-      ${f.fix ? `<div class="fix">Needs <span class="selectable">${esc(f.fix)}</span></div>` : ""}
+      ${f.fix ? `<div class="fix">Needs <span class="selectable">${esc(f.fix)}</span>${f.severity === "gain" ? ` <span class="sep">·</span> <button class="link accent" data-view="item">Check an item that has it</button>` : ""}</div>` : ""}
       ${effects ? `<div class="effects">${effects}</div>` : ""}
       ${f.detail ? `<div class="detail">${esc(f.detail)}</div>` : ""}
     </div>
@@ -622,6 +716,7 @@ document.addEventListener("click", async (event) => {
     }
     case "reset": return resetBuild();
     case "realistic": return runRealistic();
+    case "check-item": return checkItem();
     case "plan": return runPlan();
     case "cancel":
       target.textContent = "Stopping…";
@@ -635,6 +730,10 @@ document.addEventListener("click", async (event) => {
   }
 });
 
+document.addEventListener("input", (event) => {
+  if (event.target.id === "item-paste") state.itemText = event.target.value;
+});
+
 document.addEventListener("change", (event) => {
   const box = event.target.closest("[data-keep]");
   if (!box) return;
@@ -646,6 +745,9 @@ document.addEventListener("change", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && event.target.id === "paste") {
     document.querySelector('[data-action="load"]')?.click();
+  }
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && event.target.id === "item-paste") {
+    document.querySelector('[data-action="check-item"]')?.click();
   }
 });
 

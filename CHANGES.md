@@ -3,6 +3,48 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-19: Item check, and a layout that says what to do next
+
+**Goal (from user):** "it must actually help, i don't want to feel lost
+when using this app."
+
+**What changed**
+- **Check an item** (`analysis::item_check`, `doctor item <build> <file|->`,
+  app page). Paste an item copied in game with Ctrl+C (or from the trade
+  site). PoB reads it exactly as given (quality and rolls unchanged, unlike
+  PoB's own paste, which raises quality to 20), equips it in each slot it
+  fits that PoB shows for the build (not weapon swap or jewel sockets), and
+  recalculates fully. Per slot: what it replaces; damage, Total EHP and
+  smallest max hit before → after; every other changed stat (life, ES,
+  mana, Spirit, resistances, max hits, armour, evasion, block, attributes);
+  PoB warnings the item adds (an unmet requirement elsewhere, losing an
+  Unset Ring's skill slot); a verdict (better, worse, trade-off, no change)
+  from damage and Total EHP. Lines PoB cannot read are listed as not
+  counted. Text PoB cannot read as an item gives "copy it in game with
+  Ctrl+C" instead of a Lua error. CRLF from the Windows clipboard is
+  normalised.
+- Engine: `Engine::item_info`, `Engine::with_item`. The item is added,
+  equipped, settled, then unequipped and removed; the build is checked
+  byte-identical before anything else is read.
+- **Layout.** Diagnosis is the landing page (exactness check, key numbers,
+  findings, then a Next panel saying what each other page will show for
+  this build). Navigation shows each page with its question: Diagnosis
+  (what to fix first), Check an item (is it an upgrade?), Passive tree plan
+  (free gains from respecs), Realistic numbers (without assumed buffs),
+  Stats (every number PoB calculated). A measured fix links straight to the
+  item check.
+
+**What was tested**
+- Engine test: a game-format ring is read (name, the one unreadable line,
+  slots Ring 1 and Ring 2 only), equipping it changes PoB's numbers, the
+  build is restored, a wrong slot and unreadable text are refused with the
+  clear message. Engine tests 30/30; `doctor verify` exact on 0.23.1.
+- Real items from another fixture build checked against the Snap Shaman:
+  findings match what the items carry (chaos resistance 74% → 49% when the
+  replaced ring held it; the Unset Ring's skill slot and the buckler's
+  Dexterity requirement surfaced as new PoB warnings).
+- App: screenshots of the Diagnosis landing page and an item check.
+
 ## 2026-11-19: Diagnosis
 
 **Goal (from user):** start turning "your numbers" into "your problems",

@@ -17,13 +17,16 @@ swaps itself in place. Windows 11 already has the WebView2 runtime it uses. On f
 start it offers to install Path of Building (one download, ~390 MB, every
 file verified). Then paste a PoB code or link:
 
-- **Diagnosis**: what to fix first. Resistances below their maximum and
+- **Diagnosis** (the first page): what to fix first. Resistances below their maximum and
   hit chance below 100%, each with the exact amount needed and what PoB
   says it changes; a resistance penalty that is not the endgame one; PoB's
   own warnings.
-- **Overview**: your stats as PoB calculates them, whether PoB reproduces
-  the build's saved numbers exactly, the conditions they assume and the mods
-  PoB cannot read.
+- **Check an item**: paste an item copied in game with Ctrl+C. PoB equips
+  it, exactly as written, in each slot it fits and shows what changes:
+  damage, survival, resistances, and any requirement it breaks.
+- **Stats**: your stats as PoB calculates them, whether PoB reproduces the
+  build's saved numbers exactly, the conditions they assume and the mods PoB
+  cannot read.
 - **Realistic numbers**: what each assumed condition is worth; tick the ones
   you keep up.
 - **Passive tree plan**: the best point-neutral swaps, step by step, each
@@ -49,6 +52,7 @@ doctor engine install                 # download PoB2 0.23.1 and verify every fi
 doctor check <code | file | link>     # calculate a build, compare with its saved stats
 doctor check <...> --all              # every stat PoB produced, exactly as PoB wrote it
 doctor diagnose <build>               # what to fix first, each fix measured by PoB
+doctor item <build> <item.txt>        # is this item an upgrade? (- reads it from stdin)
 doctor realistic <build>              # numbers without the combat conditions the build assumes
 doctor realistic <build> --keep shocked --keep "skill recently"
                                       # ...keeping only the ones you really sustain

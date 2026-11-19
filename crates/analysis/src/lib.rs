@@ -3,6 +3,7 @@
 //! the desktop app) only present.
 //!
 //! - [`diagnose`]: what is wrong with a build, each fix measured by PoB.
+//! - [`item`]: whether an item is an upgrade, slot by slot.
 //! - [`overview`]: a build as PoB sees it: stats, assumptions, ignored mods,
 //!   and whether PoB reproduces the build's saved numbers.
 //! - [`realistic`]: what each assumed combat condition is worth, and the
@@ -10,6 +11,7 @@
 //! - [`plan`]: a step-by-step passive tree plan, each step exact.
 
 pub mod diagnose;
+pub mod item;
 pub mod overview;
 pub mod plan;
 pub mod realistic;
@@ -18,6 +20,7 @@ use pob::Summary;
 use serde::Serialize;
 
 pub use diagnose::{Diagnosis, Finding, Severity, diagnose};
+pub use item::{ItemCheck, item_check};
 pub use overview::{Overview, overview};
 pub use plan::{Goal, Plan, PlanOptions, PlanProgress, plan};
 pub use realistic::{Realistic, realistic};

@@ -54,7 +54,7 @@ pub struct Effect {
 }
 
 impl Effect {
-    fn new(label: impl Into<String>, before: f64, after: f64) -> Self {
+    pub(crate) fn new(label: impl Into<String>, before: f64, after: f64) -> Self {
         Self {
             label: label.into(),
             before,
@@ -227,7 +227,7 @@ pub fn diagnose(pool: &Pool, xml: &str) -> Result<Diagnosis> {
                 read.unsupported,
                 if read.unsupported == 1 { "" } else { "s" }
             ),
-            "No number here includes them. The overview lists them.".into(),
+            "No number here includes them. Stats lists them.".into(),
         ));
     }
     rank(&mut findings);
@@ -274,13 +274,17 @@ fn note(title: String, detail: String) -> Finding {
 
 /// Effects of a change on player stats: (label, PoB stat). Only finite
 /// values that changed are kept.
-fn measured(stats: &[(String, String)], before: &StatSheet, after: &StatSheet) -> Vec<Effect> {
+pub(crate) fn measured(
+    stats: &[(String, String)],
+    before: &StatSheet,
+    after: &StatSheet,
+) -> Vec<Effect> {
     stats
         .iter()
         .filter_map(|(label, key)| {
             let (b, a) = (before.player(key)?, after.player(key)?);
             (b.is_finite() && a.is_finite() && b != a).then(|| Effect {
-                percent: key.ends_with("Resist"),
+                percent: key.ends_with("Resist") || key.ends_with("Chance"),
                 ..Effect::new(label.clone(), b, a)
             })
         })
@@ -524,7 +528,7 @@ fn accuracy(out: &Outputs, base: &StatSheet, answer: AccuracyAnswer) -> Finding 
 
 /// The build's damage number: Full DPS when it uses it, otherwise the main
 /// skill's and minions' combined DPS.
-fn damage_effect(base: &StatSheet, after: &StatSheet) -> (&'static str, f64, f64) {
+pub(crate) fn damage_effect(base: &StatSheet, after: &StatSheet) -> (&'static str, f64, f64) {
     let full = |s: &StatSheet| s.player("FullDPS").unwrap_or(0.0);
     if full(base) > 0.0 {
         return ("Full DPS", full(base), full(after));

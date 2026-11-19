@@ -159,7 +159,11 @@ impl Engine {
         self.call("bd_warnings", ())
     }
 
-    fn call<A: mlua::IntoLuaMulti, R: mlua::FromLuaMulti>(&self, name: &str, args: A) -> Result<R> {
+    pub(crate) fn call<A: mlua::IntoLuaMulti, R: mlua::FromLuaMulti>(
+        &self,
+        name: &str,
+        args: A,
+    ) -> Result<R> {
         self.lua
             .globals()
             .get::<mlua::Function>(name)?

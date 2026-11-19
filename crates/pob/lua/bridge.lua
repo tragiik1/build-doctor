@@ -638,6 +638,85 @@ function bd_unsupported()
 	return out
 end
 
+---------------------------------------------------------------------------
+-- Items
+---------------------------------------------------------------------------
+
+-- An item from its text (as the game copies it with Ctrl+C, or as PoB
+-- writes it), exactly as given: quality and rolls are not changed.
+local function readItem(raw)
+	local ok, item = pcall(new, "Item", raw)
+	if not ok or not item.base then
+		error("PoB cannot read this item. Copy it in game with Ctrl+C and paste all of its text.", 0)
+	end
+	return item
+end
+
+-- The equipment slots an item can go in: the active item set's own slots
+-- that PoB shows for this build, not weapon-swap slots or jewel sockets.
+local function equipSlots(item)
+	local itemsTab = build.itemsTab
+	local out = { }
+	for _, slot in ipairs(itemsTab.orderedSlots) do
+		if not slot.nodeId and not slot.slotName:find("Swap") and slot:IsShown() and itemsTab:IsItemValidForSlot(item, slot.slotName) then
+			out[#out + 1] = slot
+		end
+	end
+	return out
+end
+
+-- What PoB makes of an item: its name, the slots it fits (with what the
+-- build has there now) and the lines PoB cannot read.
+function bd_item_info(raw)
+	ensureOriginal()
+	local item = readItem(raw)
+	local slots, unread = { }, { }
+	for _, slot in ipairs(equipSlots(item)) do
+		local current = build.itemsTab.items[slot.selItemId]
+		slots[#slots + 1] = { slot = slot.slotName, current = current and current.name or nil }
+	end
+	for _, list in ipairs({ item.enchantModLines, item.runeModLines, item.implicitModLines, item.explicitModLines }) do
+		for _, modLine in ipairs(list or { }) do
+			if modLine.extra then
+				unread[#unread + 1] = modLine.line
+			end
+		end
+	end
+	return { name = item.name, rarity = item.rarity, slots = slots, unread = unread }
+end
+
+-- The build with the item equipped in `slotName` instead of what is there:
+-- PoB's settled output and its warnings. The item is removed again
+-- afterwards; the original is recalculated lazily (see ensureOriginal).
+function bd_with_item(raw, slotName)
+	assert(loadedXml, "no build loaded")
+	local itemsTab = build.itemsTab
+	local item = readItem(raw)
+	local slot = itemsTab.slots[slotName]
+	if not slot or slot.nodeId or not itemsTab:IsItemValidForSlot(item, slotName) then
+		error("This item cannot go in " .. tostring(slotName), 0)
+	end
+	local previous = slot.selItemId
+	itemsTab:AddItem(item, true)
+	slot:SetSelItemId(item.id)
+	dirty = true
+	local ok, xml, passes = pcall(bd_settle)
+	local warnings = ok and currentWarnings()
+	slot:SetSelItemId(previous)
+	for i, id in ipairs(itemsTab.itemOrderList) do
+		if id == item.id then
+			table.remove(itemsTab.itemOrderList, i)
+			break
+		end
+	end
+	itemsTab.items[item.id] = nil
+	itemsTab:PopulateSlots()
+	if not ok then
+		error(xml, 0)
+	end
+	return xml, passes, warnings
+end
+
 function bd_take_log()
 	local out = log
 	log = { }

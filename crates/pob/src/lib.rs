@@ -17,6 +17,7 @@ mod engine;
 mod error;
 pub mod input;
 mod install;
+mod item;
 mod pool;
 mod stats;
 mod tree;
@@ -31,6 +32,7 @@ pub use engine::{
 };
 pub use error::{Error, Result};
 pub use install::{Install, InstallProgress, PobVersion};
+pub use item::{ItemInfo, ItemSlot};
 pub use pool::Pool;
 pub use stats::{Stat, StatDiff, StatKind, StatSheet};
 pub use tree::{NodeRef, Summary, TreeOption, TreeScreen, TreeTrial};

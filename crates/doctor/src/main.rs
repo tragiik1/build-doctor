@@ -4,6 +4,7 @@ mod check;
 mod conditions;
 mod diagnose;
 mod fixtures;
+mod item;
 mod realistic;
 mod todo;
 
@@ -22,7 +23,7 @@ struct Cli {
     #[arg(long, global = true, env = "DOCTOR_DATA_DIR")]
     data_dir: Option<PathBuf>,
 
-    /// Print check, diagnose, realistic and todo results as JSON instead of text.
+    /// Print check, diagnose, item, realistic and todo results as JSON instead of text.
     #[arg(long, global = true)]
     json: bool,
 
@@ -55,6 +56,20 @@ enum Command {
     Diagnose {
         /// A PoB code, a path to a code or XML file, or a build link.
         build: String,
+        #[arg(long, default_value = PINNED_POB)]
+        pob: String,
+        #[arg(long)]
+        jobs: Option<usize>,
+    },
+
+    /// Whether an item is an upgrade: PoB equips it in each slot it fits,
+    /// exactly as given, and recalculates the build.
+    Item {
+        /// A PoB code, a path to a code or XML file, or a build link.
+        build: String,
+        /// A file with the item's text (copy it in game with Ctrl+C), or
+        /// `-` to read it from standard input.
+        item: String,
         #[arg(long, default_value = PINNED_POB)]
         pob: String,
         #[arg(long)]
@@ -275,6 +290,24 @@ fn run(cli: Cli) -> AnyResult<ExitCode> {
                 return print_json(&analysis::diagnose(&pool, &xml)?);
             }
             return diagnose::run(&pool, &xml);
+        }
+        Command::Item {
+            build,
+            item,
+            pob,
+            jobs,
+        } => {
+            let pool = pob::Pool::new(&installed(&data, &pob)?, jobs.unwrap_or_else(default_jobs))?;
+            let xml = pob::input::read_build(&build)?;
+            let text = if item == "-" {
+                std::io::read_to_string(std::io::stdin())?
+            } else {
+                std::fs::read_to_string(&item)?
+            };
+            if cli.json {
+                return print_json(&analysis::item_check(&pool, &xml, &text)?);
+            }
+            return item::run(&pool, &xml, &text);
         }
         Command::Realistic {
             build,
