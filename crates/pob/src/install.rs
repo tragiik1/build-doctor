@@ -12,10 +12,13 @@
 //! updater trusts: every kept file must match its SHA-1, computed the way
 //! PoB's `update_manifest.py` does (text files hashed with CRLF line endings).
 
+use std::collections::VecDeque;
 use std::fmt;
 use std::fs;
-use std::io::{self, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::{Error, Result};
@@ -112,17 +115,122 @@ impl Install {
         Ok(())
     }
 
-    /// Downloads PoB2 release `tag` from GitHub into `<parent>/<version>/`,
-    /// verifying every file, and returns the install. An existing install of
-    /// the same version is replaced only after the new one verifies.
-    pub fn download(tag: &str, parent: &Path) -> Result<Self> {
-        fs::create_dir_all(parent).map_err(|e| Error::io("create", parent, e))?;
-        let archive_path = parent.join(format!(".download-{tag}.zip"));
-        let url = format!("https://codeload.github.com/{REPOSITORY}/zip/refs/tags/{tag}");
-        fetch_to_file(&url, &archive_path)?;
-        let result = Self::from_archive(&archive_path, parent);
-        let _ = fs::remove_file(&archive_path);
-        result
+    /// Downloads PoB2 release `tag` from GitHub into `<parent>/<version>/`
+    /// and returns the install. Fetches only the files the engine uses
+    /// (about 1,100 files, ~50 MB), several at a time, each checked against
+    /// PoB's manifest; `progress` is told after every file. An existing
+    /// install of the same version is replaced only after the new one
+    /// verifies.
+    pub fn download(
+        tag: &str,
+        parent: &Path,
+        progress: &(dyn Fn(InstallProgress) + Sync),
+    ) -> Result<Self> {
+        remove_stale_archives(parent);
+        let base = format!("https://raw.githubusercontent.com/{REPOSITORY}/{tag}/");
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .user_agent(concat!("build-doctor/", env!("CARGO_PKG_VERSION")))
+            .timeout_connect(Some(Duration::from_secs(20)))
+            .timeout_global(Some(Duration::from_secs(180)))
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let fetch = |path: &str| -> Result<Option<Vec<u8>>> {
+            let url = format!("{base}{}", url_path(path));
+            let mut last = String::new();
+            for attempt in 0..3 {
+                if attempt > 0 {
+                    std::thread::sleep(Duration::from_secs(attempt));
+                }
+                match agent.get(&url).call() {
+                    Ok(response) if response.status() == 404 => return Ok(None),
+                    Ok(response) if response.status().is_success() => {
+                        match response
+                            .into_body()
+                            .with_config()
+                            .limit(64 * 1024 * 1024)
+                            .read_to_vec()
+                        {
+                            Ok(bytes) => return Ok(Some(bytes)),
+                            Err(e) => last = e.to_string(),
+                        }
+                    }
+                    Ok(response) => last = format!("HTTP {}", response.status()),
+                    Err(e) => last = e.to_string(),
+                }
+            }
+            Err(Error::Download(format!("{url}: {last}")))
+        };
+
+        let manifest_bytes = fetch("manifest.xml")?
+            .ok_or_else(|| Error::Download(format!("PoB2 {tag} not found on GitHub")))?;
+        let manifest_text = String::from_utf8(manifest_bytes)
+            .map_err(|_| Error::Corrupt("manifest.xml is not UTF-8".into()))?;
+        let manifest = parse_manifest(&manifest_text)?;
+        let staging = fresh_staging(parent, &manifest.version)?;
+
+        let total = manifest.files.len() + UNLISTED_FILES.len();
+        let done = AtomicUsize::new(0);
+        let bytes = AtomicU64::new(0);
+        let queue = Mutex::new(manifest.files.iter().collect::<VecDeque<_>>());
+        let failure: Mutex<Option<Error>> = Mutex::new(None);
+        let report = |size: usize| {
+            let done = done.fetch_add(1, Ordering::SeqCst) + 1;
+            let bytes = bytes.fetch_add(size as u64, Ordering::SeqCst) + size as u64;
+            progress(InstallProgress { done, total, bytes });
+        };
+        std::thread::scope(|scope| {
+            for _ in 0..PARALLEL_DOWNLOADS {
+                scope.spawn(|| {
+                    loop {
+                        if failure.lock().map_or(true, |f| f.is_some()) {
+                            return;
+                        }
+                        let Some(file) = queue.lock().ok().and_then(|mut q| q.pop_front()) else {
+                            return;
+                        };
+                        let result = fetch(&file.path).and_then(|found| {
+                            let data = found.ok_or_else(|| {
+                                Error::Corrupt(format!("GitHub has no {}", file.path))
+                            })?;
+                            check_hash(&file.path, &data, &file.sha1)?;
+                            write_file(&staging.join(&file.path), &data)?;
+                            Ok(data.len())
+                        });
+                        match result {
+                            Ok(size) => report(size),
+                            Err(err) => {
+                                if let Ok(mut f) = failure.lock() {
+                                    f.get_or_insert(err);
+                                }
+                                return;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        if let Some(err) = failure.into_inner().unwrap_or_default() {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(err);
+        }
+
+        let mut unlisted = Vec::new();
+        for (i, path) in UNLISTED_FILES.iter().enumerate() {
+            match fetch(path)? {
+                Some(data) => {
+                    report(data.len());
+                    unlisted.push((*path, data));
+                }
+                None if i > 0 => report(0),
+                None => {
+                    return Err(Error::Download(format!(
+                        "GitHub has no {path} for PoB2 {tag}"
+                    )));
+                }
+            }
+        }
+        finish(parent, staging, &manifest, &manifest_text, &unlisted)
     }
 
     /// Installs from a PoB2 source archive already on disk (the zip GitHub
@@ -147,35 +255,21 @@ impl Install {
             .map_err(|_| Error::Corrupt("manifest.xml is not UTF-8".into()))?;
         let manifest = parse_manifest(&manifest_text)?;
 
-        let staging = parent.join(format!(".staging-{}", manifest.version));
-        if staging.exists() {
-            fs::remove_dir_all(&staging).map_err(|e| Error::io("remove", &staging, e))?;
-        }
+        let staging = fresh_staging(parent, &manifest.version)?;
         for file in &manifest.files {
             let bytes = read_zip_entry(&mut zip, &format!("{prefix}{}", file.path))?;
             check_hash(&file.path, &bytes, &file.sha1)?;
             write_file(&staging.join(&file.path), &bytes)?;
         }
-        write_file(&staging.join("manifest.xml"), manifest_text.as_bytes())?;
-
-        let mut record = String::new();
+        let mut unlisted = Vec::new();
         for (i, path) in UNLISTED_FILES.iter().enumerate() {
             let name = format!("{prefix}{path}");
             if i > 0 && zip.by_name(&name).is_err() {
                 continue;
             }
-            let bytes = read_zip_entry(&mut zip, &name)?;
-            record.push_str(&format!("{}  {path}\n", pob_sha1(&bytes)));
-            write_file(&staging.join(path), &bytes)?;
+            unlisted.push((*path, read_zip_entry(&mut zip, &name)?));
         }
-        write_file(&staging.join(UNLISTED_RECORD), record.as_bytes())?;
-
-        let root = parent.join(manifest.version.as_str());
-        if root.exists() {
-            fs::remove_dir_all(&root).map_err(|e| Error::io("remove", &root, e))?;
-        }
-        fs::rename(&staging, &root).map_err(|e| Error::io("move into place", &root, e))?;
-        Self::open(root)
+        finish(parent, staging, &manifest, &manifest_text, &unlisted)
     }
 
     pub fn root(&self) -> &Path {
@@ -195,6 +289,81 @@ impl Install {
     pub fn lua_lib_dir(&self) -> PathBuf {
         self.root.join("runtime/lua")
     }
+}
+
+/// `path` with every byte outside RFC 3986's unreserved set (and `/`)
+/// percent-encoded, e.g. spaces in PoB's file names.
+fn url_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~/".contains(&byte) {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+/// How many files `download` fetches at once.
+const PARALLEL_DOWNLOADS: usize = 8;
+
+/// Where a download is: files fetched and verified so far, and their bytes.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct InstallProgress {
+    pub done: usize,
+    pub total: usize,
+    pub bytes: u64,
+}
+
+/// Removes `.download-*.zip` files that earlier versions of the installer
+/// downloaded (the whole PoB repository, ~390 MB) and may have left behind.
+fn remove_stale_archives(parent: &Path) {
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(".download-") && name.ends_with(".zip") {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// An empty staging directory for `version` next to the installs.
+fn fresh_staging(parent: &Path, version: &PobVersion) -> Result<PathBuf> {
+    fs::create_dir_all(parent).map_err(|e| Error::io("create", parent, e))?;
+    let staging = parent.join(format!(".staging-{version}"));
+    if staging.exists() {
+        fs::remove_dir_all(&staging).map_err(|e| Error::io("remove", &staging, e))?;
+    }
+    Ok(staging)
+}
+
+/// Writes the manifest and the unlisted engine files (recording their SHA-1)
+/// into `staging`, then moves it into place as `<parent>/<version>`.
+fn finish(
+    parent: &Path,
+    staging: PathBuf,
+    manifest: &Manifest,
+    manifest_text: &str,
+    unlisted: &[(&str, Vec<u8>)],
+) -> Result<Install> {
+    write_file(&staging.join("manifest.xml"), manifest_text.as_bytes())?;
+    let mut record = String::new();
+    for (path, bytes) in unlisted {
+        record.push_str(&format!("{}  {path}\n", pob_sha1(bytes)));
+        write_file(&staging.join(path), bytes)?;
+    }
+    write_file(&staging.join(UNLISTED_RECORD), record.as_bytes())?;
+
+    let root = parent.join(manifest.version.as_str());
+    if root.exists() {
+        fs::remove_dir_all(&root).map_err(|e| Error::io("remove", &root, e))?;
+    }
+    fs::rename(&staging, &root).map_err(|e| Error::io("move into place", &root, e))?;
+    Install::open(root)
 }
 
 fn parse_manifest(text: &str) -> Result<Manifest> {
@@ -224,7 +393,8 @@ fn parse_manifest(text: &str) -> Result<Manifest> {
         }
         let path = match part {
             "program" | "tree" => format!("src/{name}"),
-            "runtime" => format!("runtime/{name}"),
+            // The engine only uses runtime/lua; the rest is GUI runtime.
+            "runtime" if name.starts_with("lua/") => format!("runtime/{name}"),
             _ => continue,
         };
         if path.split('/').any(|c| c == ".." || c.is_empty()) {
@@ -309,24 +479,6 @@ fn check_hash(path: &str, bytes: &[u8], expected: &str) -> Result<()> {
     }
 }
 
-fn fetch_to_file(url: &str, dest: &Path) -> Result<()> {
-    // The archive is several hundred MB; allow a slow connection, never forever.
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .user_agent(concat!("build-doctor/", env!("CARGO_PKG_VERSION")))
-        .timeout_connect(Some(Duration::from_secs(20)))
-        .timeout_global(Some(Duration::from_secs(30 * 60)))
-        .build()
-        .into();
-    let response = agent
-        .get(url)
-        .call()
-        .map_err(|e| Error::Download(format!("{url}: {e}")))?;
-    let mut reader = response.into_body().into_reader();
-    let mut file = fs::File::create(dest).map_err(|e| Error::io("create", dest, e))?;
-    io::copy(&mut reader, &mut file).map_err(|e| Error::Download(format!("{url}: {e}")))?;
-    Ok(())
-}
-
 fn read_zip_entry(zip: &mut zip::ZipArchive<fs::File>, name: &str) -> Result<Vec<u8>> {
     let mut entry = zip
         .by_name(name)
@@ -405,6 +557,12 @@ mod tests {
         assert_eq!(files[0].sha1, "abc");
         assert!(parse_unlisted_record("abc  src/Evil.lua\n").is_err());
         assert!(parse_unlisted_record("no-separator\n").is_err());
+    }
+
+    #[test]
+    fn encodes_url_paths() {
+        assert_eq!(url_path("src/Data/Bases/axe.lua"), "src/Data/Bases/axe.lua");
+        assert_eq!(url_path("runtime/a b+c.lua"), "runtime/a%20b%2Bc.lua");
     }
 
     #[test]

@@ -79,7 +79,7 @@ async function refreshEngine() {
 }
 
 async function installEngine() {
-  await run("Installing Path of Building", `Downloading PoB2 ${state.engine.pinned} from GitHub and checking every file. About 390 MB; this happens once.`, async () => {
+  await run("Installing Path of Building", `Downloading PoB2 ${state.engine.pinned} from GitHub and checking every file. About 50 MB; this happens once.`, async () => {
     await invoke("install_engine");
     await refreshEngine();
   });
@@ -122,6 +122,14 @@ function resetBuild() {
   state.error = null;
   render();
 }
+
+listen("install-progress", (event) => {
+  const p = event.payload;
+  if (!state.busy) return;
+  state.busy.detail = `${p.done.toLocaleString("en-US")} of ${p.total.toLocaleString("en-US")} files · ${(p.bytes / 1e6).toFixed(1)} MB, each checked against Path of Building's own list`;
+  state.busy.progress = p.total ? p.done / p.total : null;
+  render();
+});
 
 listen("plan-progress", (event) => {
   state.planProgress = event.payload;

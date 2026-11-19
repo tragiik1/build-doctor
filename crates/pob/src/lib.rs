@@ -28,7 +28,7 @@ pub const PINNED_VERSION: &str = "0.23.1";
 pub use data_dir::{DataDir, version_key};
 pub use engine::{Assumption, AssumptionKind, Calculation, Engine, Identity, UnsupportedMod};
 pub use error::{Error, Result};
-pub use install::{Install, PobVersion};
+pub use install::{Install, InstallProgress, PobVersion};
 pub use pool::Pool;
 pub use stats::{Stat, StatDiff, StatKind, StatSheet};
 pub use tree::{NodeRef, Summary, TreeOption, TreeScreen, TreeTrial};

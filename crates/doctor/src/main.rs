@@ -186,7 +186,16 @@ fn run(cli: Cli) -> AnyResult<ExitCode> {
                 None => {
                     let tag = format!("v{}", version.trim_start_matches('v'));
                     println!("Downloading PoB2 {tag} into {}", data.pob_dir().display());
-                    pob::Install::download(&tag, &data.pob_dir())?
+                    let install = pob::Install::download(&tag, &data.pob_dir(), &|p| {
+                        eprint!(
+                            "\r  {} of {} files, {:.1} MB",
+                            p.done,
+                            p.total,
+                            p.bytes as f64 / 1e6
+                        );
+                    });
+                    eprintln!();
+                    install?
                 }
             };
             println!(

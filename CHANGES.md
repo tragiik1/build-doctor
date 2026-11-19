@@ -3,6 +3,29 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-19: Faster PoB install with progress
+
+**Problem (reported):** the app's first-start install sat for 15+ minutes
+with no progress. It downloaded GitHub's archive of the whole PoB repository
+(~390 MB, mostly art) before using 47 MB of it.
+
+**What changed**
+- `Install::download` fetches only the files the engine uses, from
+  raw.githubusercontent.com, 8 at a time with 3 tries each: 1,005 files,
+  45.5 MB, each SHA-1-checked against PoB's manifest as it arrives. Paths
+  are percent-encoded (PoB has file names with spaces). The `runtime` part
+  is limited to `runtime/lua` (the rest is GUI runtime).
+- Progress callback (`InstallProgress`): the CLI prints files and MB; the app
+  shows a determinate bar with the same.
+- Leftover `.download-*.zip` files from the old installer are deleted.
+- `from_archive` (offline install) shares the same finishing step.
+
+**What was tested**
+- `doctor engine install` from scratch: 5.5 s here, `engine verify` passes,
+  precision gate exact on the new install.
+- The real app's Install button under Xvfb: live progress, finished in a few
+  seconds, removed a planted stale archive, then ready to analyse.
+
 ## 2026-11-19: Desktop app
 
 **What changed**

@@ -44,10 +44,14 @@ fn engine_status(state: State<'_, AppState>) -> EngineStatus {
 }
 
 #[tauri::command]
-async fn install_engine(state: State<'_, AppState>) -> CommandResult<String> {
+async fn install_engine(app: AppHandle, state: State<'_, AppState>) -> CommandResult<String> {
     let dir = state.data.pob_dir();
     blocking(move || {
-        let install = pob::Install::download(&format!("v{}", pob::PINNED_VERSION), &dir)?;
+        let progress = |p: pob::InstallProgress| {
+            let _ = app.emit("install-progress", p);
+        };
+        let install =
+            pob::Install::download(&format!("v{}", pob::PINNED_VERSION), &dir, &progress)?;
         Ok(install.version().to_string())
     })
     .await
