@@ -3,6 +3,50 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-19: Realistic numbers (`doctor realistic`)
+
+**What changed**
+- `doctor realistic <build> [--keep TEXT]... [--jobs N]`. PoB recalculates the
+  build with each assumed combat condition switched off on its own (what it is
+  worth), with all of them off (the floor), and with all but the kept ones off
+  (your realistic numbers). Reported for Full DPS, Combined DPS, Minion DPS,
+  Total EHP and smallest max hit (with its damage type), whichever the build
+  produces. Nothing is judged by the doctor: the player says what they keep up.
+- Condition vs scenario: Enemy Stats, Quest Rewards and the General section's
+  calculation-mode lists (resistance penalty, ailment/armour/… modes) describe
+  the simulated fight and stay as configured. Everything else the build sets
+  and PoB considers relevant, including custom modifiers, is a condition.
+- Engine: `Engine::without_config(vars)` unsets config options exactly as
+  unticking/clearing them in PoB's config tab does (`input[var] = nil`, then
+  `BuildModList`, then a settled recalculation). The original is restored
+  lazily: anything that reads PoB state afterwards (identity, assumptions,
+  unsupported mods, `ensure_original`) first recalculates the original and
+  checks PoB's output is byte-identical to the original load, else errors.
+- Engine pool: `Engine::map(xml, extra_workers, items, job)`. Extra engines
+  load the same build, must reproduce the first engine's saved output
+  exactly before taking work, and must be back in the original state at the
+  end. `pob::Error` is now `Send + Sync` (Lua errors kept as text).
+- CLI exits quietly on a closed pipe (`| head`) instead of panicking.
+- Display: numbers from 1,000 up are shown whole (exact values: `check --all`).
+
+**What was tested**
+- 22 engine/library tests, 5 CLI tests: new ones check a config what-if
+  changes DPS, that unsetting nothing equals the original exactly, that a
+  fresh load agrees after what-ifs, and that parallel what-ifs equal
+  sequential ones in order. `doctor verify`: 34 exact, 0 failed.
+- Timing: a config what-if needs a full uncached recalculation (PoB wipes its
+  skill cache when anything changes: ~400–570 ms vs 63 ms cached), so the
+  speed comes from parallelism: 23 conditions took 59 s on one engine and
+  21 s on 4 engines here (expect ~10 s on an 8-core PC), identical numbers.
+
+**What it shows on the fixtures**
+- Snap Shaman (0.5.5 forum Build of the Week): 401,771 → 87,326 Combined DPS
+  (−78.3%) without conditions; "Total Resonance Count = 200" alone −32.5%,
+  enemy Shocked −21.8%, Frozen −15.0%, a custom modifier −10.8%.
+- Ice Shot Deadeye: 11.9M → 1.67M Full DPS (−85.9%) and Total EHP −60.1%;
+  "Is the enemy Blinded?" alone is −21.9% EHP.
+- Navira minion Disciple: none of its 11 conditions change minion DPS.
+
 ## 2026-11-19: Bug and limitation review
 
 **Decisions (from user):** do not report the Darkness Enthroned bug to PoB2.

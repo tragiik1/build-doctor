@@ -4,6 +4,7 @@ mod check;
 mod data_dir;
 mod fixtures;
 mod input;
+mod realistic;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -46,6 +47,23 @@ enum Command {
         all: bool,
     },
 
+    /// Show what each combat condition the build assumes is worth, and its
+    /// numbers without them (or with only the ones you keep).
+    Realistic {
+        /// A PoB code, a path to a code or XML file, or a build link.
+        build: String,
+        /// Keep conditions whose label contains this text (case-insensitive),
+        /// for conditions you really sustain. Repeatable.
+        #[arg(long)]
+        keep: Vec<String>,
+        #[arg(long, default_value = PINNED_POB)]
+        pob: String,
+        /// PoB engines to run in parallel (about 300 MB each). Defaults to
+        /// the number of CPU cores, at most 8.
+        #[arg(long)]
+        jobs: Option<usize>,
+    },
+
     /// Run the fixture suite: every fixture build must reproduce its saved
     /// stats exactly on each PoB version it is recorded against.
     Verify {
@@ -79,7 +97,20 @@ enum EngineCommand {
     },
 }
 
+fn default_jobs() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(8)
+}
+
 fn main() -> ExitCode {
+    // Exit quietly when output is piped into something that stops reading
+    // (e.g. `| head`), as command-line tools do, instead of panicking.
+    #[cfg(unix)]
+    // SAFETY: restoring the default SIGPIPE disposition before any threads exist.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let cli = Cli::parse();
     match run(cli) {
         Ok(code) => code,
@@ -137,6 +168,17 @@ fn run(cli: Cli) -> AnyResult<ExitCode> {
             let install = data.install(&pob)?;
             let xml = input::read_build(&build)?;
             return check::run(&install, &xml, all);
+        }
+        Command::Realistic {
+            build,
+            keep,
+            pob,
+            jobs,
+        } => {
+            let install = data.install(&pob)?;
+            let xml = input::read_build(&build)?;
+            let jobs = jobs.unwrap_or_else(default_jobs).max(1);
+            return realistic::run(&install, &xml, &keep, jobs);
         }
         Command::Verify { fixtures, sweep } => {
             return fixtures::verify(&data, &fixtures, sweep);

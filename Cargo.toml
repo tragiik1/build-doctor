@@ -14,6 +14,7 @@ pob = { path = "crates/pob" }
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive", "env"] }
 flate2 = "1"
+libc = "0.2"
 mlua = { version = "0.12", features = ["luajit", "vendored"] }
 roxmltree = "0.20"
 serde = { version = "1", features = ["derive"] }

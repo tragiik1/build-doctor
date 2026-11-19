@@ -22,7 +22,7 @@ unsafe extern "C-unwind" {
 #[derive(Debug)]
 pub struct Engine {
     lua: Lua,
-    install: Install,
+    pub(crate) install: Install,
 }
 
 /// Who a build is. Every field is `None` when PoB has no value for it.
@@ -59,9 +59,22 @@ pub struct UnsupportedMod {
 /// tab shows it (for example "Is the enemy Shocked?" = yes).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assumption {
+    /// PoB's config variable name, e.g. `conditionEnemyShocked`.
+    pub var: String,
+    pub kind: AssumptionKind,
     pub section: String,
     pub label: String,
     pub value: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AssumptionKind {
+    /// A state the player has to keep up in a fight (enemy Shocked, on full
+    /// life, a custom modifier, …).
+    Condition,
+    /// What fight is simulated and how PoB calculates it: enemy stats, the
+    /// General section's calculation modes, campaign rewards.
+    Scenario,
 }
 
 /// PoB's settled result for one build.
@@ -126,6 +139,35 @@ impl Engine {
         Ok(Calculation { xml, stats, passes })
     }
 
+    /// Recalculates the loaded build with the given config options unset (as
+    /// if unticked or cleared in PoB's config tab) and returns PoB's settled
+    /// result. The build is restored afterwards and PoB's output is checked to
+    /// be byte-identical to the original, so later calls are unaffected.
+    pub fn without_config(&self, vars: &[&str]) -> Result<Calculation> {
+        let without: mlua::Function = self.lua.globals().get("bd_without_config")?;
+        let (saved, passes) = without
+            .call::<(Option<String>, u32)>(vars.to_vec())
+            .map_err(|err| Error::Pob(self.describe(&err, false)))?;
+        let xml = saved.ok_or(Error::Unsettled {
+            passes,
+            changing: Vec::new(),
+        })?;
+        let stats = StatSheet::from_build_xml(&xml)?;
+        Ok(Calculation { xml, stats, passes })
+    }
+
+    /// Puts PoB back on the loaded build after what-ifs (recalculating it) and
+    /// returns its saved output, checked byte-identical to the original load.
+    pub fn ensure_original(&self) -> Result<String> {
+        self.lua
+            .globals()
+            .get::<mlua::Function>("bd_ensure_original")?
+            .call::<()>(())
+            .map_err(|err| Error::Pob(self.describe(&err, false)))?;
+        let saved: Option<String> = self.lua.load("return bd_loaded_xml()").eval()?;
+        saved.ok_or_else(|| Error::Pob("no build loaded".into()))
+    }
+
     /// The loaded build's class, level and main skill, as PoB resolved them.
     pub fn identity(&self) -> Result<Identity> {
         let identity: Table = self
@@ -154,7 +196,13 @@ impl Engine {
             .call(())?;
         rows.into_iter()
             .map(|row| {
+                let kind = match row.get::<String>("kind")?.as_str() {
+                    "scenario" => AssumptionKind::Scenario,
+                    _ => AssumptionKind::Condition,
+                };
                 Ok(Assumption {
+                    var: row.get("var")?,
+                    kind,
                     section: row.get("section")?,
                     label: row.get("label")?,
                     value: row.get("value")?,
@@ -348,6 +396,63 @@ mod tests {
             .expect("Frozen assumption");
         assert_eq!(frozen.value, "yes");
         assert!(assumptions.iter().any(|a| a.label.contains("Boss")));
+    }
+
+    /// Unsetting a condition must change what it should, and leave the
+    /// loaded build exactly as it was for every later calculation.
+    #[test]
+    #[ignore = "needs a PoB2 install in DOCTOR_POB_DIR"]
+    fn config_what_if_changes_numbers_and_restores_state() {
+        let engine = engine();
+        let original = engine.load(&fixture("maxroll_gd79010q.xml")).unwrap();
+        let frozen = engine
+            .assumptions()
+            .unwrap()
+            .into_iter()
+            .find(|a| a.label.contains("Frozen"))
+            .unwrap();
+        assert_eq!(frozen.kind, AssumptionKind::Condition);
+
+        let without = engine.without_config(&[&frozen.var]).unwrap();
+        assert_ne!(
+            without.stats.player("CombinedDPS"),
+            original.stats.player("CombinedDPS")
+        );
+        // Unsetting nothing is the original calculation, exactly.
+        let same = engine.without_config(&[]).unwrap();
+        assert_eq!(original.stats.diff(&same.stats), []);
+        // And a fresh load agrees with the engine after what-ifs.
+        assert_eq!(
+            original
+                .stats
+                .diff(&engine.load(&fixture("maxroll_gd79010q.xml")).unwrap().stats),
+            []
+        );
+    }
+
+    /// What-ifs spread over several engines give exactly what one engine
+    /// gives running them in sequence, in input order.
+    #[test]
+    #[ignore = "needs a PoB2 install in DOCTOR_POB_DIR"]
+    fn parallel_what_ifs_match_sequential() {
+        let xml = fixture("maxroll_gd79010q.xml");
+        let engine = engine();
+        engine.load(&xml).unwrap();
+        let vars: Vec<String> = engine
+            .assumptions()
+            .unwrap()
+            .into_iter()
+            .filter(|a| a.kind == AssumptionKind::Condition)
+            .take(4)
+            .map(|a| a.var)
+            .collect();
+        let run = |engine: &Engine, var: String| engine.without_config(&[&var]).map(|c| c.stats);
+        let parallel = engine.map(&xml, 2, vars.clone(), run).unwrap();
+        let sequential: Vec<_> = vars.into_iter().map(|v| run(&engine, v).unwrap()).collect();
+        for (p, s) in parallel.iter().zip(&sequential) {
+            assert_eq!(p.diff(s), []);
+        }
+        engine.ensure_original().unwrap();
     }
 
     #[test]

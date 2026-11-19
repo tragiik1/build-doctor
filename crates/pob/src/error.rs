@@ -39,8 +39,15 @@ pub enum Error {
     #[error("PoB's numbers never settled: they changed on each of {passes} recalculations. Still changing:\n  {}", .changing.join("\n  "))]
     Unsettled { passes: u32, changing: Vec<String> },
 
+    /// Kept as text so `Error` is `Send + Sync` (mlua's error is not).
     #[error("Lua error: {0}")]
-    Lua(#[from] mlua::Error),
+    Lua(String),
+}
+
+impl From<mlua::Error> for Error {
+    fn from(err: mlua::Error) -> Self {
+        Self::Lua(err.to_string())
+    }
 }
 
 impl Error {

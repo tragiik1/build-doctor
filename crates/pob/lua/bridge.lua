@@ -154,6 +154,26 @@ function bd_settle()
 	end
 end
 
+local loadedXml -- PoB's settled output for the loaded build, unmodified
+
+-- What-ifs leave PoB's outputs describing the what-if. Anything that reads
+-- PoB's state afterwards first recalculates the original build and checks
+-- that PoB's output is byte-identical to the original, so a what-if can never
+-- leak into later numbers.
+local dirty = false
+
+local function ensureOriginal()
+	if not dirty then
+		return
+	end
+	local restored = bd_settle()
+	if restored ~= loadedXml then
+		error("PoB did not return to the build's original state after a what-if", 0)
+	end
+	dirty = false
+end
+
+
 function bd_load(xml)
 	popups = { }
 	loadBuildFromXML(xml, "build-doctor")
@@ -164,11 +184,15 @@ function bd_load(xml)
 	if #popups > 0 then
 		error(table.concat(popups, "\n"), 0)
 	end
-	return bd_settle()
+	local saved, passes, before, after = bd_settle()
+	loadedXml = saved
+	dirty = false
+	return saved, passes, before, after
 end
 
 -- Who the loaded build is, as PoB sees it. Read-only.
 function bd_identity()
+	ensureOriginal()
 	local spec = build.spec
 	local env = build.calcsTab.mainEnv
 	local skill = env and env.player and env.player.mainSkill
@@ -187,8 +211,23 @@ end
 -- The configuration the loaded build's numbers depend on: every option the
 -- build sets that PoB considers relevant to it (PoB's own config-tab
 -- visibility rules), plus the enemy type, which always matters. Read-only.
+--
+-- Each is either a "condition" (a state the player has to keep up in a fight,
+-- such as "Is the enemy Shocked?" or a custom modifier) or "scenario" (what
+-- fight is being simulated and how PoB calculates it: Enemy Stats, the
+-- General section's calculation-mode lists such as the resistance penalty,
+-- and campaign rewards).
 local configOptions = LoadModule("Modules/ConfigOptions")
 local ALWAYS_SHOWN = { enemyIsBoss = true }
+
+local SCENARIO_SECTIONS = { ["Enemy Stats"] = true, ["Quest Rewards"] = true }
+
+local function assumptionKind(section, varData)
+	if SCENARIO_SECTIONS[section] or (section == "General" and varData.type == "list") then
+		return "scenario"
+	end
+	return "condition"
+end
 
 local function displayValue(varData, value)
 	if varData.type == "list" then
@@ -204,6 +243,7 @@ local function displayValue(varData, value)
 end
 
 function bd_assumptions()
+	ensureOriginal()
 	local configTab = build.configTab
 	local input = configTab.input
 	local out, section = { }, ""
@@ -219,9 +259,12 @@ function bd_assumptions()
 			local control = configTab.varControls[varData.var]
 			local relevant = control and control:GetProperty("shown")
 			if value ~= nil and value ~= false and value ~= "" and relevant then
+				local label = StripEscapes(tostring(varData.label or "")):gsub(":%s*$", "")
 				out[#out + 1] = {
+					var = varData.var,
+					kind = assumptionKind(section, varData),
 					section = section,
-					label = StripEscapes(tostring(varData.label or varData.var)):gsub(":%s*$", ""),
+					label = label ~= "" and label or section,
 					value = displayValue(varData, value),
 				}
 			end
@@ -230,9 +273,46 @@ function bd_assumptions()
 	return out
 end
 
+-- Recalculates the loaded build with the given config options unset (as if
+-- unticked or cleared in PoB's config tab) and returns PoB's settled output.
+-- The options are put back immediately; the recalculation of the original
+-- happens lazily (see ensureOriginal).
+function bd_without_config(vars)
+	assert(loadedXml, "no build loaded")
+	local configTab = build.configTab
+	local input = configTab.input
+	local saved = { }
+	for _, var in ipairs(vars) do
+		saved[var] = input[var]
+		input[var] = nil
+	end
+	configTab:BuildModList()
+	dirty = true
+	local ok, xml, passes = pcall(bd_settle)
+	for var, value in pairs(saved) do
+		input[var] = value
+	end
+	configTab:BuildModList()
+	if not ok then
+		error(xml, 0)
+	end
+	return xml, passes
+end
+
+-- Recalculates the original build if a what-if ran since, and checks PoB's
+-- output is byte-identical to the original load.
+function bd_ensure_original()
+	ensureOriginal()
+end
+
+function bd_loaded_xml()
+	return loadedXml
+end
+
 -- Mod lines on equipped items and socketed jewels that PoB cannot parse
 -- (red in PoB's item tooltips). No number PoB produces includes them.
 function bd_unsupported()
+	ensureOriginal()
 	local out = { }
 	local itemsTab = build.itemsTab
 	local function scan(slotName, item)

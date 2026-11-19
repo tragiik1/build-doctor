@@ -24,6 +24,9 @@ The binary is `target/release/doctor` (`doctor.exe` on Windows).
 doctor engine install                 # download PoB2 0.23.1 and verify every file
 doctor check <code | file | link>     # calculate a build, compare with its saved stats
 doctor check <...> --all              # every stat PoB produced, exactly as PoB wrote it
+doctor realistic <build>              # numbers without the combat conditions the build assumes
+doctor realistic <build> --keep shocked --keep "skill recently"
+                                      # ...keeping only the ones you really sustain
 doctor verify                         # precision gate over fixtures/
 doctor verify --sweep                 # which PoB releases reproduce which fixtures
 ```

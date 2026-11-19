@@ -14,9 +14,10 @@ pub mod code;
 mod engine;
 mod error;
 mod install;
+mod pool;
 mod stats;
 
-pub use engine::{Assumption, Calculation, Engine, Identity, UnsupportedMod};
+pub use engine::{Assumption, AssumptionKind, Calculation, Engine, Identity, UnsupportedMod};
 pub use error::{Error, Result};
 pub use install::{Install, PobVersion};
 pub use stats::{Stat, StatDiff, StatKind, StatSheet};

@@ -206,6 +206,7 @@ name = "doctor"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "libc",
  "pob",
  "serde",
  "toml",

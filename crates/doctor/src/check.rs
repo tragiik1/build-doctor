@@ -61,16 +61,7 @@ pub fn run(install: &Install, xml: &str, all: bool) -> AnyResult<ExitCode> {
     let id = engine.identity()?;
 
     let or_dash = |v: &Option<String>| v.clone().unwrap_or_else(|| "-".into());
-    let who = match (&id.ascendancy, &id.class) {
-        (Some(asc), Some(class)) if asc != "None" => format!("{asc} ({class})"),
-        (_, Some(class)) => class.clone(),
-        _ => "Unknown class".into(),
-    };
-    println!(
-        "{who}, level {}, main skill {}",
-        id.level.map_or("-".into(), |l| l.to_string()),
-        or_dash(&id.main_skill),
-    );
+    println!("{}", describe_build(&id));
     println!(
         "PoB2 {} (tree {}), started in {:.1}s, calculated in {:.2}s over {} pass{}",
         install.version(),
@@ -191,8 +182,22 @@ pub fn run(install: &Install, xml: &str, all: bool) -> AnyResult<ExitCode> {
     Ok(ExitCode::from(2))
 }
 
+/// "Shaman (Druid), level 94, main skill Snap".
+pub fn describe_build(id: &pob::Identity) -> String {
+    let who = match (&id.ascendancy, &id.class) {
+        (Some(asc), Some(class)) if asc != "None" => format!("{asc} ({class})"),
+        (_, Some(class)) => class.clone(),
+        _ => "Unknown class".into(),
+    };
+    format!(
+        "{who}, level {}, main skill {}",
+        id.level.map_or("-".into(), |l| l.to_string()),
+        id.main_skill.as_deref().unwrap_or("-"),
+    )
+}
+
 /// Multi-line config values (custom modifiers, quest rewards) on one line.
-fn one_line(value: &str) -> String {
+pub fn one_line(value: &str) -> String {
     value
         .split(['\n', '\t'])
         .map(str::trim)
@@ -201,9 +206,12 @@ fn one_line(value: &str) -> String {
         .join("; ")
 }
 
-/// Thousands separators, at most two decimals, trailing zeros dropped.
+/// Thousands separators; whole numbers from 1,000 up, otherwise at most two
+/// decimals, trailing zeros dropped. Display only: PoB's exact values are in
+/// `check --all`.
 pub fn format_number(value: f64) -> String {
-    let rounded = format!("{:.2}", value.abs());
+    let decimals = if value.abs() >= 1000.0 { 0 } else { 2 };
+    let rounded = format!("{:.*}", decimals, value.abs());
     let (int, frac) = rounded.split_once('.').unwrap_or((&rounded, ""));
     let mut grouped = String::new();
     for (i, digit) in int.chars().enumerate() {
@@ -232,7 +240,8 @@ mod tests {
     #[test]
     fn formats_numbers() {
         assert_eq!(format_number(0.0), "0");
-        assert_eq!(format_number(1234567.891), "1,234,567.89");
+        assert_eq!(format_number(1234567.891), "1,234,568");
+        assert_eq!(format_number(12.345), "12.35");
         assert_eq!(format_number(999.5), "999.5");
         assert_eq!(format_number(-42.0), "-42");
         assert_eq!(format_number(-0.001), "0");
