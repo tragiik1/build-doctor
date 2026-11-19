@@ -2,9 +2,7 @@
 
 mod check;
 mod conditions;
-mod data_dir;
 mod fixtures;
-mod input;
 mod realistic;
 mod todo;
 
@@ -13,9 +11,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-/// PoB2 release the doctor calculates with. Matches the current PoB2 app
-/// release; bump it, then run `doctor verify`, when PoB2 ships an update.
-pub const PINNED_POB: &str = "0.23.1";
+use pob::PINNED_VERSION as PINNED_POB;
 
 #[derive(Debug, Parser)]
 #[command(name = "doctor", version, about = "Path of Exile 2 build doctor")]
@@ -24,6 +20,10 @@ struct Cli {
     /// directory (%LOCALAPPDATA%\build-doctor on Windows).
     #[arg(long, global = true, env = "DOCTOR_DATA_DIR")]
     data_dir: Option<PathBuf>,
+
+    /// Print check, realistic and todo results as JSON instead of text.
+    #[arg(long, global = true)]
+    json: bool,
 
     #[command(subcommand)]
     command: Command,
@@ -73,7 +73,7 @@ enum Command {
         build: String,
         /// What to improve.
         #[arg(long, value_enum, default_value = "damage")]
-        goal: todo::Goal,
+        goal: GoalArg,
         /// Combat conditions you really sustain (as in `doctor realistic`);
         /// all others are removed before scoring. Repeatable.
         #[arg(long)]
@@ -127,6 +127,30 @@ enum EngineCommand {
     },
 }
 
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum GoalArg {
+    /// More damage; survival changes are shown alongside.
+    Damage,
+    /// A larger smallest max hit.
+    Survival,
+}
+
+/// The installed PoB release `version`, with the command that installs it
+/// when it is missing.
+fn installed(data: &pob::DataDir, version: &str) -> AnyResult<pob::Install> {
+    data.install(version).map_err(|err| match err {
+        pob::Error::NotInstalled(v) => {
+            format!("PoB2 {v} is not installed. Run: doctor engine install --version {v}").into()
+        }
+        other => other.into(),
+    })
+}
+
+fn print_json(value: &impl serde::Serialize) -> AnyResult<ExitCode> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(ExitCode::SUCCESS)
+}
+
 fn default_jobs() -> usize {
     std::thread::available_parallelism()
         .map_or(1, |n| n.get())
@@ -154,7 +178,7 @@ fn main() -> ExitCode {
 type AnyResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 fn run(cli: Cli) -> AnyResult<ExitCode> {
-    let data = data_dir::DataDir::new(cli.data_dir)?;
+    let data = pob::DataDir::new(cli.data_dir)?;
     match cli.command {
         Command::Engine(EngineCommand::Install { version, archive }) => {
             let install = match archive {
@@ -190,14 +214,17 @@ fn run(cli: Cli) -> AnyResult<ExitCode> {
             }
         }
         Command::Engine(EngineCommand::Verify { version }) => {
-            let install = data.install(&version)?;
+            let install = installed(&data, &version)?;
             install.verify()?;
             println!("PoB2 {} matches its manifest.", install.version());
         }
         Command::Check { build, pob, all } => {
-            let install = data.install(&pob)?;
-            let xml = input::read_build(&build)?;
-            return check::run(&install, &xml, all);
+            let pool = pob::Pool::new(&installed(&data, &pob)?, 1)?;
+            let xml = pob::input::read_build(&build)?;
+            if cli.json {
+                return print_json(&analysis::overview(&pool, &xml)?);
+            }
+            return check::run(&pool, &xml, all);
         }
         Command::Realistic {
             build,
@@ -205,10 +232,13 @@ fn run(cli: Cli) -> AnyResult<ExitCode> {
             pob,
             jobs,
         } => {
-            let install = data.install(&pob)?;
-            let xml = input::read_build(&build)?;
-            let jobs = jobs.unwrap_or_else(default_jobs).max(1);
-            return realistic::run(&install, &xml, &keep, jobs);
+            let pool = pob::Pool::new(&installed(&data, &pob)?, jobs.unwrap_or_else(default_jobs))?;
+            let xml = pob::input::read_build(&build)?;
+            let kept = conditions::kept_vars(&pool, &xml, &keep)?;
+            if cli.json {
+                return print_json(&analysis::realistic(&pool, &xml, &kept)?);
+            }
+            return realistic::run(&pool, &xml, &kept);
         }
         Command::Todo {
             build,
@@ -220,17 +250,21 @@ fn run(cli: Cli) -> AnyResult<ExitCode> {
             pob,
             jobs,
         } => {
-            let install = data.install(&pob)?;
-            let xml = input::read_build(&build)?;
-            let options = todo::Options {
-                keep,
-                goal,
-                jobs: jobs.unwrap_or_else(default_jobs).max(1),
+            let pool = pob::Pool::new(&installed(&data, &pob)?, jobs.unwrap_or_else(default_jobs))?;
+            let xml = pob::input::read_build(&build)?;
+            let options = analysis::PlanOptions {
+                kept: conditions::kept_vars(&pool, &xml, &keep)?,
+                goal: match goal {
+                    GoalArg::Damage => analysis::Goal::Damage,
+                    GoalArg::Survival => analysis::Goal::Survival,
+                },
                 max_distance,
                 steps,
-                export,
             };
-            return todo::run(&install, &xml, &options);
+            if cli.json {
+                return print_json(&analysis::plan(&pool, &xml, &options, &|_| {}, &|| false)?);
+            }
+            return todo::run(&pool, &xml, &options, export);
         }
         Command::Verify { fixtures, sweep } => {
             return fixtures::verify(&data, &fixtures, sweep);

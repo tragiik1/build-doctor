@@ -7,6 +7,24 @@ ships, and is checked against builds saved by the PoB2 app.
 - Research, design and plan: [`docs/RESEARCH.md`](docs/RESEARCH.md)
 - Running log of changes, tests and open questions: [`CHANGES.md`](CHANGES.md)
 
+## Desktop app
+
+Download `build-doctor.exe` from the latest successful CI run (repository
+**Actions** tab → newest run → **Artifacts** → `build-doctor-windows`), unzip
+and run it. Windows 11 already has the WebView2 runtime it uses. On first
+start it offers to install Path of Building (one download, ~390 MB, every
+file verified). Then paste a PoB code or link:
+
+- **Overview**: your stats as PoB calculates them, whether PoB reproduces
+  the build's saved numbers exactly, the conditions they assume and the mods
+  PoB cannot read.
+- **Realistic numbers**: what each assumed condition is worth; tick the ones
+  you keep up.
+- **Passive tree plan**: the best point-neutral swaps, step by step, each
+  confirmed by PoB, with the final tree as a PoB code to copy.
+
+To build it yourself: `cargo build --release -p build-doctor`.
+
 ## Build
 
 Needs Rust 1.88+ and a C compiler (MSVC on Windows, via Visual Studio Build

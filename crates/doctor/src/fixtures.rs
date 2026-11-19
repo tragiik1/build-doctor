@@ -15,7 +15,7 @@ use pob::{Engine, Install, StatSheet};
 use serde::Deserialize;
 
 use crate::AnyResult;
-use crate::data_dir::{DataDir, version_key};
+use pob::{DataDir, version_key};
 
 #[derive(Debug, Deserialize)]
 struct Manifest {

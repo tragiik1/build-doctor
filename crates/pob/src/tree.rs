@@ -10,7 +10,8 @@ use mlua::Table;
 use crate::{Calculation, Engine, Error, Result, StatSheet};
 
 /// The numbers a ranking needs, from one calculation.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Summary {
     pub full_dps: f64,
     pub combined_dps: f64,
@@ -53,7 +54,7 @@ impl Summary {
 }
 
 /// A passive node, by PoB's id and display name.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
 pub struct NodeRef {
     pub id: u32,
     pub name: String,

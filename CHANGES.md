@@ -3,6 +3,40 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-19: Desktop app
+
+**What changed**
+- `crates/app` (binary `build-doctor`): Tauri 2 desktop app. Native window
+  rendered by WebView2 on Windows; plain HTML/CSS/JS interface (`ui/`, no
+  framework, no Node build) that only presents what the Rust commands return.
+  Commands: `engine_status`, `install_engine`, `load_build`, `realistic`,
+  `plan` (progress events, cancellable), `cancel_plan`. One engine per core
+  (max 8) started on the first build and kept warm.
+- Screens: start (paste a code or link; install PoB if missing), Overview
+  (tiles, exact-reproduction verdict, PoB warnings, stats, assumed
+  conditions, fight simulated, mods not counted), Realistic numbers
+  (tick-to-keep, shared with the plan), Passive tree plan (goal, steps, live
+  progress, steps as Take/Drop chips with deltas, copy final PoB code).
+- `crates/analysis` (new library): overview, realistic and plan logic moved
+  out of the CLI, returning serialisable data with plan progress and
+  cancellation. The CLI and the app share it; the CLI only prints.
+- `pob`: build input (codes, links, files) and the data directory moved in
+  from the CLI; `pob::PINNED_VERSION`; `Pool::install()`; `Summary` and
+  `NodeRef` serialise.
+- CLI: `--json` on check, realistic and todo.
+- CI: Linux jobs install the WebKitGTK libraries; the Windows job uploads
+  `build-doctor.exe` and `doctor.exe` as the `build-doctor-windows` artifact.
+
+**What was tested**
+- Refactor regression: CLI output unchanged on the Shaman fixture (401,771 /
+  87,326 / 135,462; all 105 saved stats reproduced). 31 tests and
+  `doctor verify` (34 exact) pass.
+- The real app under Xvfb, driven by xdotool: pasting the maxroll link
+  fetched the build and showed the Exact verdict; Realistic numbers and a
+  5-step plan ran with live progress and matched the CLI (87,326 → 151,156).
+- Interface reviewed in Chromium at 1360×860 on real `--json` data.
+- Not run here: the Windows build of the app (CI builds it).
+
 ## 2026-11-19: Ranked to-do list, passive tree (`doctor todo`)
 
 **What changed**

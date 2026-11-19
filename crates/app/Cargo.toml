@@ -1,0 +1,20 @@
+[package]
+name = "build-doctor"
+description = "Build Doctor desktop app."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+analysis.workspace = true
+pob.workspace = true
+serde.workspace = true
+tauri = { version = "2.12", features = [] }
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[lints]
+workspace = true
