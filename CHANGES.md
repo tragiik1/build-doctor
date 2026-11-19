@@ -58,6 +58,11 @@ fixture builds yet, so public builds are used.
   `src/HeadlessWrapper.lua` (PoB's `manifest.cfg` excludes it). Fixed: the
   installer takes it (and `_SimpleGraphic.def.lua` when present) from the same
   archive and records its SHA-1 in `unlisted.sha1` for `engine verify`.
+- CI run 2 (commit 37f5e29): all green. On windows-latest: download from
+  GitHub and SHA-1 verify of PoB2 0.23.1 and 0.21.0, 17/17 engine tests
+  (sandbox, determinism), precision gate **9 exact, 0 failed** (8 builds on
+  0.21.0, the Shaman on 0.23.1), engine reuse clean. `doctor.exe` is 4.2 MB.
+  Same on ubuntu-latest.
 
 **Findings**
 - **PoB2 bug (0.22.0 up to current dev/beta):** with Darkness Enthroned ("91%
