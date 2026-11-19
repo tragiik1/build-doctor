@@ -11,7 +11,7 @@ mod update;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use analysis::{Goal, Overview, Plan, PlanOptions, PlanProgress, Realistic};
+use analysis::{Diagnosis, Goal, Overview, Plan, PlanOptions, PlanProgress, Realistic};
 use pob::{DataDir, Pool};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -70,6 +70,12 @@ async fn load_build(state: State<'_, AppState>, input: String) -> CommandResult<
     .await?;
     *state.build.lock().map_err(|e| e.to_string())? = Some(xml);
     Ok(overview)
+}
+
+#[tauri::command]
+async fn diagnose(state: State<'_, AppState>) -> CommandResult<Diagnosis> {
+    let (pool, xml) = (pool(&state)?, build(&state)?);
+    blocking(move || Ok(analysis::diagnose(&pool, &xml)?)).await
 }
 
 #[tauri::command]
@@ -207,6 +213,7 @@ fn main() {
             engine_status,
             install_engine,
             load_build,
+            diagnose,
             realistic,
             plan,
             cancel_plan,

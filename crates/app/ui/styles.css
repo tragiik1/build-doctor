@@ -112,6 +112,22 @@ input, textarea, button, select { font: inherit; color: inherit; }
 .verdict.ok strong { color: var(--pos); }
 .verdict.warn strong { color: var(--warn); }
 
+/* Diagnosis */
+.diagnosis { margin-bottom: 16px; }
+.findings { list-style: none; margin: 0; padding: 0; }
+.finding { display: grid; grid-template-columns: 64px 1fr; gap: 14px; padding: 12px 0; border-top: 1px solid var(--border); }
+.finding:first-child { border-top: 0; padding-top: 2px; }
+.finding .tag { font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase; font-weight: 600; padding-top: 2px; }
+.finding.problem .tag { color: var(--neg); }
+.finding.gain .tag { color: var(--pos); }
+.finding.note .tag { color: var(--text-3); }
+.finding .title { font-weight: 600; }
+.finding .fix { margin-top: 3px; color: var(--text-2); }
+.finding .fix span { color: var(--text); }
+.finding .effects { margin-top: 3px; color: var(--text-2); }
+.finding .effects .sep { color: var(--text-3); margin: 0 8px; }
+.finding .detail { margin-top: 3px; color: var(--text-3); font-size: 12.5px; }
+
 /* Tables */
 table { width: 100%; border-collapse: collapse; }
 .kv td { padding: 6px 0; border-top: 1px solid var(--border); }

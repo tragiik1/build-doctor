@@ -10,6 +10,8 @@ const state = {
   error: null,
   view: "overview",      // overview | realistic | plan
   overview: null,
+  diagnosis: null,       // { status: "running" | "done" | "error", result, error }
+  loadSeq: 0,            // which load a running diagnosis belongs to
   kept: new Set(),       // condition vars the player keeps up
   realistic: null,
   realisticKept: null,   // kept set the realistic result was computed for
@@ -138,12 +140,27 @@ async function loadBuild(input) {
   const overview = await run("Calculating your build", "Starting Path of Building and loading the build.", () => invoke("load_build", { input }));
   if (!overview) return;
   state.overview = overview;
+  runDiagnosis();
   state.kept = new Set();
   state.realistic = null;
   state.realisticKept = null;
   state.plan = null;
   state.view = "overview";
   render();
+}
+
+// Runs in the background after a build loads; the overview fills it in when
+// it arrives, unless another build was loaded meanwhile.
+async function runDiagnosis() {
+  const seq = ++state.loadSeq;
+  state.diagnosis = { status: "running" };
+  try {
+    const result = await invoke("diagnose");
+    if (seq === state.loadSeq) state.diagnosis = { status: "done", result };
+  } catch (err) {
+    if (seq === state.loadSeq) state.diagnosis = { status: "error", error: String(err) };
+  }
+  if (seq === state.loadSeq) render();
 }
 
 async function runRealistic() {
@@ -165,7 +182,9 @@ async function runPlan() {
 }
 
 function resetBuild() {
+  state.loadSeq++;
   state.overview = null;
+  state.diagnosis = null;
   state.realistic = null;
   state.plan = null;
   state.error = null;
@@ -319,7 +338,7 @@ function renderOverview() {
   return `
     <div class="page-head"><div>
       <h1>Overview</h1>
-      <p>Your build as Path of Building calculates it, with everything those numbers depend on.</p>
+      <p>Your build as Path of Building calculates it: what to fix first, then everything the numbers depend on.</p>
     </div></div>
     ${verdict}${outdated}
     <div class="tiles">
@@ -328,7 +347,8 @@ function renderOverview() {
       ${tile("Smallest max hit", smallest ? fmt(smallest.value) : "–", smallest ? `${smallest.label} damage` : "")}
       ${tile(es && es > (life ?? 0) ? "Energy shield" : "Life", fmt(es && es > (life ?? 0) ? es : life), es && life ? `Life ${fmt(life)} · ES ${fmt(es)}` : "")}
     </div>
-    ${o.warnings.length ? `<div class="verdict warn"><strong>Path of Building warns</strong><span class="muted">${o.warnings.map(esc).join(" · ")}</span></div>` : ""}
+    ${renderDiagnosis()}
+    ${o.warnings.length && state.diagnosis?.status === "error" ? `<div class="verdict warn"><strong>Path of Building warns</strong><span class="muted">${o.warnings.map(esc).join(" · ")}</span></div>` : ""}
     <div class="grid cols-2">
       <div class="panel">
         <div class="panel-head"><h2>Stats</h2><span class="meta">Path of Building ${esc(o.build.pobVersion)}</span></div>
@@ -354,6 +374,49 @@ function renderOverview() {
         </div>
       </div>
     </div>`;
+}
+
+function renderDiagnosis() {
+  const d = state.diagnosis;
+  if (!d) return "";
+  const head = (meta) => `<div class="panel-head"><h2>Diagnosis</h2><span class="meta">${meta}</span></div>`;
+  if (d.status === "running") {
+    return `<div class="panel diagnosis">${head("checking")}<div class="panel-body">
+      <div class="muted">Path of Building is testing resistances, accuracy and its own warnings, recalculating the build in full for each fix.</div>
+      <div class="track indeterminate" style="margin-top:12px"><i></i></div>
+    </div></div>`;
+  }
+  if (d.status === "error") {
+    return `<div class="panel diagnosis">${head("")}<div class="panel-body"><div class="error" style="margin:0">${esc(d.error)}</div></div></div>`;
+  }
+  const findings = d.result.findings;
+  const count = (severity, one, many) => {
+    const n = findings.filter((f) => f.severity === severity).length;
+    return n ? `${n} ${n === 1 ? one : many}` : null;
+  };
+  const meta = [count("problem", "problem", "problems"), count("gain", "fix", "fixes"), count("note", "note", "notes")].filter(Boolean).join(" · ");
+  return `<div class="panel diagnosis">${head(meta)}<div class="panel-body">
+    ${findings.length
+      ? `<ol class="findings">${findings.map(finding).join("")}</ol>`
+      : `<div class="muted">Nothing to fix. Path of Building finds no problems and no measurable gains.</div>`}
+  </div></div>`;
+}
+
+function finding(f) {
+  const tag = { problem: "Problem", gain: "Fix", note: "Note" }[f.severity];
+  const effects = f.effects.map((e) => e.percent
+    ? `<span>${esc(e.label)} <span class="num">${fmt(e.before)}% → ${fmt(e.after)}%</span></span>`
+    : `<span>${esc(e.label)} <span class="num">${fmt(e.before)} → ${fmt(e.after)}</span> <span class="${tone(e.change)}">${signed(e.change)}</span></span>`,
+  ).join('<span class="sep">·</span>');
+  return `<li class="finding ${f.severity}">
+    <span class="tag">${tag}</span>
+    <div>
+      <div class="title selectable">${esc(f.title)}</div>
+      ${f.fix ? `<div class="fix">Needs <span class="selectable">${esc(f.fix)}</span></div>` : ""}
+      ${effects ? `<div class="effects">${effects}</div>` : ""}
+      ${f.detail ? `<div class="detail">${esc(f.detail)}</div>` : ""}
+    </div>
+  </li>`;
 }
 
 function tile(label, value, sub) {

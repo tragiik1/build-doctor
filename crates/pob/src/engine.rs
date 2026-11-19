@@ -1,5 +1,6 @@
 //! One sandboxed Lua state running PoB2.
 
+use std::collections::BTreeMap;
 use std::ffi::c_int;
 use std::path::{self, Path};
 
@@ -76,6 +77,9 @@ pub enum AssumptionKind {
     /// General section's calculation modes, campaign rewards.
     Scenario,
 }
+
+/// Numbers from PoB's output table, by PoB's key.
+pub type Outputs = BTreeMap<String, f64>;
 
 /// PoB's settled result for one build.
 #[derive(Debug, Clone)]
@@ -154,6 +158,61 @@ impl Engine {
         })?;
         let stats = StatSheet::from_build_xml(&xml)?;
         Ok(Calculation { xml, stats, passes })
+    }
+
+    /// Numbers from PoB's output for the loaded build, including ones PoB
+    /// does not save (such as `MissingFireResist`). Keys PoB did not set are
+    /// absent; booleans read as 1 or 0.
+    pub fn outputs(&self, keys: &[&str]) -> Result<Outputs> {
+        let values: Table = self
+            .lua
+            .globals()
+            .get::<mlua::Function>("bd_outputs")?
+            .call(keys.to_vec())
+            .map_err(|err| Error::Pob(self.describe(&err, false)))?;
+        read_outputs(values)
+    }
+
+    /// One recalculation with extra modifier lines, returning only the
+    /// requested outputs: a quick probe for searches. PoB can need more than
+    /// one pass to settle, so confirm what a probe finds with
+    /// [`Engine::with_mods`].
+    pub fn probe_mods(&self, lines: &[&str], keys: &[&str]) -> Result<Outputs> {
+        let values: Table = self
+            .lua
+            .globals()
+            .get::<mlua::Function>("bd_probe_mods")?
+            .call((lines.to_vec(), keys.to_vec()))
+            .map_err(|err| Error::Pob(self.describe(&err, false)))?;
+        read_outputs(values)
+    }
+
+    /// The least Spirit any skill or support in PoB's data reserves.
+    pub fn cheapest_spirit(&self) -> Result<Option<f64>> {
+        Ok(self
+            .lua
+            .globals()
+            .get::<mlua::Function>("bd_cheapest_spirit")?
+            .call(())?)
+    }
+
+    /// Recalculates the loaded build with extra modifier lines, as if typed
+    /// into PoB's Custom Modifiers box, and returns PoB's settled result and
+    /// the requested outputs. A line PoB cannot read completely is an error.
+    /// The build is restored afterwards, as with [`Engine::without_config`].
+    pub fn with_mods(&self, lines: &[&str], keys: &[&str]) -> Result<(Calculation, Outputs)> {
+        let with: mlua::Function = self.lua.globals().get("bd_with_mods")?;
+        let (saved, passes, values) = with
+            .call::<(Option<String>, u32, Option<Table>)>((lines.to_vec(), keys.to_vec()))
+            .map_err(|err| Error::Pob(self.describe(&err, false)))?;
+        let (Some(xml), Some(values)) = (saved, values) else {
+            return Err(Error::Unsettled {
+                passes,
+                changing: Vec::new(),
+            });
+        };
+        let stats = StatSheet::from_build_xml(&xml)?;
+        Ok((Calculation { xml, stats, passes }, read_outputs(values)?))
     }
 
     /// Puts PoB back on the loaded build after what-ifs (recalculating it) and
@@ -262,6 +321,13 @@ impl Engine {
 }
 
 /// Up to five lines that differ between two saves, as `before -> after`.
+fn read_outputs(values: Table) -> Result<Outputs> {
+    values
+        .pairs::<String, f64>()
+        .map(|pair| pair.map_err(Error::from))
+        .collect()
+}
+
 fn changed_lines(before: &str, after: &str) -> Vec<String> {
     before
         .lines()
@@ -493,6 +559,36 @@ mod tests {
         let restored = engine.ensure_original().unwrap();
         let restored = StatSheet::from_build_xml(&restored).unwrap();
         assert_eq!(base.stats.diff(&restored), []);
+    }
+
+    /// A Custom Modifiers what-if changes PoB's numbers as typed, the quick
+    /// probe agrees with the settled run, and the build is restored
+    /// afterwards. A line PoB cannot read is refused, never ignored.
+    #[test]
+    #[ignore = "needs a PoB2 install in DOCTOR_POB_DIR"]
+    fn custom_mod_what_if_changes_and_restores() {
+        let engine = engine();
+        let base = engine.load(&fixture("maxroll_gd79010q.xml")).unwrap();
+        let keys = ["ChaosResist", "MissingChaosResist"];
+        let before = engine.outputs(&keys).unwrap();
+        let missing = before["MissingChaosResist"];
+        assert!(missing > 0.0, "{before:?}");
+
+        let line = format!("+{missing}% to Chaos Resistance");
+        let (calc, after) = engine.with_mods(&[&line], &keys).unwrap();
+        assert_eq!(after["ChaosResist"], before["ChaosResist"] + missing);
+        assert_eq!(after["MissingChaosResist"], 0.0);
+        assert_ne!(base.stats.diff(&calc.stats), []);
+        let probed = engine.probe_mods(&[&line], &keys).unwrap();
+        assert_eq!(probed["ChaosResist"], after["ChaosResist"]);
+
+        let restored = engine.ensure_original().unwrap();
+        let restored = StatSheet::from_build_xml(&restored).unwrap();
+        assert_eq!(base.stats.diff(&restored), []);
+        assert_eq!(engine.outputs(&keys).unwrap(), before);
+
+        let err = engine.with_mods(&["Grants a pony"], &keys).unwrap_err();
+        assert!(err.to_string().contains("cannot read"), "{err}");
     }
 
     #[test]

@@ -17,6 +17,10 @@ swaps itself in place. Windows 11 already has the WebView2 runtime it uses. On f
 start it offers to install Path of Building (one download, ~390 MB, every
 file verified). Then paste a PoB code or link:
 
+- **Diagnosis**: what to fix first. Resistances below their maximum and
+  hit chance below 100%, each with the exact amount needed and what PoB
+  says it changes; a resistance penalty that is not the endgame one; PoB's
+  own warnings.
 - **Overview**: your stats as PoB calculates them, whether PoB reproduces
   the build's saved numbers exactly, the conditions they assume and the mods
   PoB cannot read.
@@ -44,6 +48,7 @@ The binary is `target/release/doctor` (`doctor.exe` on Windows).
 doctor engine install                 # download PoB2 0.23.1 and verify every file
 doctor check <code | file | link>     # calculate a build, compare with its saved stats
 doctor check <...> --all              # every stat PoB produced, exactly as PoB wrote it
+doctor diagnose <build>               # what to fix first, each fix measured by PoB
 doctor realistic <build>              # numbers without the combat conditions the build assumes
 doctor realistic <build> --keep shocked --keep "skill recently"
                                       # ...keeping only the ones you really sustain

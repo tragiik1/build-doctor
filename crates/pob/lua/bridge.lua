@@ -333,6 +333,95 @@ function bd_loaded_xml()
 	return loadedXml
 end
 
+-- Numbers from PoB's main output table (the player's calculation, main
+-- skill included), including the ones PoB does not save, such as
+-- MissingFireResist. Booleans read as 1 or 0; keys PoB did not set are left
+-- out.
+local function outputValues(keys)
+	local output = build.calcsTab.mainOutput or { }
+	local out = { }
+	for _, key in ipairs(keys) do
+		local value = output[key]
+		if type(value) == "number" then
+			out[key] = value
+		elseif type(value) == "boolean" then
+			out[key] = value and 1 or 0
+		end
+	end
+	return out
+end
+
+-- The least Spirit any skill or support in PoB's data reserves (flat, at
+-- any level), or nil if none does.
+function bd_cheapest_spirit()
+	local least
+	for _, skill in pairs(data.skills) do
+		for _, level in pairs(skill.levels or { }) do
+			local cost = type(level) == "table" and level.spiritReservationFlat
+			if cost and cost > 0 and (not least or cost < least) then
+				least = cost
+			end
+		end
+	end
+	return least
+end
+
+function bd_outputs(keys)
+	ensureOriginal()
+	return outputValues(keys)
+end
+
+local function pack(...)
+	return { n = select("#", ...), ... }
+end
+
+-- Runs `calculate` with extra modifier lines added to PoB's Custom Modifiers
+-- box, exactly as if typed there, then puts the box back. Every line must be
+-- one PoB reads completely; anything else is an error, never silently
+-- ignored. The original is recalculated lazily (see ensureOriginal).
+local function withCustomMods(lines, calculate)
+	assert(loadedXml, "no build loaded")
+	for _, line in ipairs(lines) do
+		local mods, extra = modLib.parseMod(line)
+		if not mods or extra then
+			error('PoB cannot read the modifier "' .. line .. '"', 0)
+		end
+	end
+	local configTab = build.configTab
+	local before = configTab.input.customMods
+	local added = table.concat(lines, "\n")
+	configTab.input.customMods = (before and before ~= "") and (before .. "\n" .. added) or added
+	configTab:BuildModList()
+	dirty = true
+	local results = pack(pcall(calculate))
+	configTab.input.customMods = before
+	configTab:BuildModList()
+	if not results[1] then
+		error(results[2], 0)
+	end
+	return unpack(results, 2, results.n)
+end
+
+-- The build with extra modifier lines: PoB's settled output plus the
+-- requested output values.
+function bd_with_mods(lines, keys)
+	return withCustomMods(lines, function()
+		local xml, passes = bd_settle()
+		return xml, passes, xml and outputValues(keys)
+	end)
+end
+
+-- One recalculation with extra modifier lines, returning only the requested
+-- output values: a quick probe for searches, whose answer is then confirmed
+-- with bd_with_mods.
+function bd_probe_mods(lines, keys)
+	return withCustomMods(lines, function()
+		build.buildFlag = true
+		frame()
+		return outputValues(keys)
+	end)
+end
+
 ---------------------------------------------------------------------------
 -- Passive tree
 ---------------------------------------------------------------------------

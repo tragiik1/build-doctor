@@ -3,6 +3,68 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-19: Diagnosis
+
+**Goal (from user):** start turning "your numbers" into "your problems",
+genuinely useful and exact, no filler.
+
+**What changed**
+- `analysis::diagnose` and `doctor diagnose <build>`; in the app it runs in
+  the background after a build loads and fills a Diagnosis panel at the top
+  of the overview. Findings, most important first:
+  - **Problems:** a resistance penalty that is not the endgame one (with
+    what the endgame penalty costs: each resistance and Total EHP), and
+    PoB's own warnings (unmet requirements, negative Spirit, too many gem
+    groups, not enough mana): things the game would not allow, so the
+    numbers include something the character cannot have.
+  - **Fixes**, ranked by their largest effect: each resistance below its
+    maximum (needs +N%, with that element's max hit and Total EHP before →
+    after), and hit chance below 100% (the flat accuracy that reaches 100%,
+    with the damage before → after).
+  - **Notes:** resistance over the maximum, unreserved Spirit (only when it
+    is at least the cheapest Spirit skill or support in PoB's data), spare
+    weapon-set passives, mods PoB ignores.
+- How fixes are measured: PoB recalculates the build with the fix typed into
+  its own Custom Modifiers box (`+28% to Chaos Resistance`,
+  `+15155 to Accuracy Rating`). Every line must be one PoB reads
+  completely, or the analysis fails. The build is restored afterwards and
+  checked byte-identical, as for every what-if.
+- A fix that changes none of PoB's numbers (raising chaos resistance on a
+  chaos-immune build) is not reported. A resistance that does not move when
+  raised (something sets it) is reported without a gain.
+- Accuracy search: quick one-pass probes in parallel rounds (doubling, then
+  evenly spaced between the largest miss and the smallest hit) until the
+  answer is within 1% of the least that works; then both ends are confirmed
+  with full settled recalculations. If they disagree, no amount is given.
+- Engine: `Engine::outputs` (PoB output values that are not saved, such as
+  `MissingFireResist`), `with_mods`, `probe_mods`, `cheapest_spirit`.
+
+**Left out on purpose**
+- Mana sustain: PoB's regeneration numbers leave out leech, flasks and
+  on-kill recovery, so a "you run dry" finding would be wrong for many
+  builds.
+- Unspent passive points: auto-level builds derive the level from the
+  points spent, so it cannot be told reliably.
+
+**What was tested**
+- Unit tests: ranking, warning severity, finite-only effects, mod lines,
+  the accuracy search on thresholds 1 to 25,600 (within 1%, at most 4
+  rounds).
+- Engine test: a Custom Modifiers what-if raises chaos resistance exactly to
+  its maximum, the quick probe agrees with the settled run, the build is
+  restored, an unreadable line is refused.
+- All 13 fixtures: sensible findings; the 3 Darkness Enthroned builds are
+  refused as before. An Act 3 penalty variant reports 75% → 56% cold and
+  lightning, −15.6% EHP. A 95%-reduced-accuracy variant: hit chance 39%,
+  needs +15,155 (true least, by an exact sequential search: 15,075),
+  Full DPS +317.3%, identical to "hits can't be evaded" (PoB applies hit
+  chance to crits too, so the gain is all hit chance). Results across 2-8
+  engines: 15,082 to 15,155, all within 1%.
+- Timing on this 4-core container: 6-15 s per build; 30 s for the heavy
+  accuracy case (9 skills, 2.8M Full DPS).
+- `doctor verify` still exact on 0.23.1; engine tests 29/29.
+- App: screenshot with the diagnosis panel, checking state and results.
+
 ## 2026-11-19: Versions, releases and self-update
 
 **Decision (from user):** make the repository public so the app can update

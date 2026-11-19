@@ -2,6 +2,7 @@
 
 mod check;
 mod conditions;
+mod diagnose;
 mod fixtures;
 mod realistic;
 mod todo;
@@ -21,7 +22,7 @@ struct Cli {
     #[arg(long, global = true, env = "DOCTOR_DATA_DIR")]
     data_dir: Option<PathBuf>,
 
-    /// Print check, realistic and todo results as JSON instead of text.
+    /// Print check, diagnose, realistic and todo results as JSON instead of text.
     #[arg(long, global = true)]
     json: bool,
 
@@ -47,6 +48,17 @@ enum Command {
         /// List every stat, not just the summary.
         #[arg(long)]
         all: bool,
+    },
+
+    /// What is wrong with the build, most important first, each fix
+    /// measured by PoB.
+    Diagnose {
+        /// A PoB code, a path to a code or XML file, or a build link.
+        build: String,
+        #[arg(long, default_value = PINNED_POB)]
+        pob: String,
+        #[arg(long)]
+        jobs: Option<usize>,
     },
 
     /// Show what each combat condition the build assumes is worth, and its
@@ -255,6 +267,14 @@ fn run(cli: Cli) -> AnyResult<ExitCode> {
                 return print_json(&analysis::overview(&pool, &xml)?);
             }
             return check::run(&pool, &xml, all);
+        }
+        Command::Diagnose { build, pob, jobs } => {
+            let pool = pob::Pool::new(&installed(&data, &pob)?, jobs.unwrap_or_else(default_jobs))?;
+            let xml = pob::input::read_build(&build)?;
+            if cli.json {
+                return print_json(&analysis::diagnose(&pool, &xml)?);
+            }
+            return diagnose::run(&pool, &xml);
         }
         Command::Realistic {
             build,
