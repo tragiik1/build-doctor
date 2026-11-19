@@ -49,6 +49,16 @@ os.execute = function() return nil end
 os.remove = function() return nil, "build-doctor: deleting files is disabled" end
 os.rename = function() return nil, "build-doctor: renaming files is disabled" end
 os.exit = function() error("build-doctor: PoB tried to exit", 2) end
+local rawInput, rawOutput = io.input, io.output
+io.input = function(file)
+	if file ~= nil then error("build-doctor: io.input redirection is disabled", 2) end
+	return rawInput()
+end
+io.output = function(file)
+	if file ~= nil then error("build-doctor: io.output redirection is disabled", 2) end
+	return rawOutput()
+end
+package.loadlib = nil
 -- No environment leaks into calculations. This also keeps PoB's ModCache on
 -- (HeadlessWrapper disables it when CI is set), matching the desktop app.
 os.getenv = function() return nil end
@@ -88,6 +98,22 @@ end
 if not build then
 	error("PoB did not reach the build screen: " .. (takePrompt() or "no error message"), 0)
 end
+
+-- PoB enters developer mode when run from a repository copy (its manifest
+-- has no branch/platform), which the installed desktop app never does. Dev
+-- mode changes no calculation, but it auto-saves a temp build file whenever a
+-- build is replaced. Match the app.
+launch.devMode = false
+
+-- PoB reports some load problems (for example an unknown passive tree
+-- version) only as a popup. Record popups instead of opening them, so a build
+-- PoB could not load properly is an error rather than a set of wrong numbers.
+local popups = { }
+local function recordPopup(_, title, msg)
+	popups[#popups + 1] = tostring(title) .. ": " .. tostring(msg):gsub("\n+", " ")
+end
+main.OpenMessagePopup = recordPopup
+main.OpenConfirmPopup = recordPopup
 
 ---------------------------------------------------------------------------
 -- API used by the Rust side
@@ -129,10 +155,14 @@ function bd_settle()
 end
 
 function bd_load(xml)
+	popups = { }
 	loadBuildFromXML(xml, "build-doctor")
 	local prompt = takePrompt()
 	if prompt then
 		error(prompt, 0)
+	end
+	if #popups > 0 then
+		error(table.concat(popups, "\n"), 0)
 	end
 	return bd_settle()
 end
@@ -149,8 +179,82 @@ function bd_identity()
 		ascendancy = spec and spec.curAscendClassName,
 		level = build.characterLevel,
 		treeVersion = spec and spec.treeVersion,
+		latestTreeVersion = latestTreeVersion,
 		mainSkill = effect and effect.name,
 	}
+end
+
+-- The configuration the loaded build's numbers depend on: every option the
+-- build sets that PoB considers relevant to it (PoB's own config-tab
+-- visibility rules), plus the enemy type, which always matters. Read-only.
+local configOptions = LoadModule("Modules/ConfigOptions")
+local ALWAYS_SHOWN = { enemyIsBoss = true }
+
+local function displayValue(varData, value)
+	if varData.type == "list" then
+		for _, entry in ipairs(varData.list or { }) do
+			if entry.val == value then
+				return StripEscapes(tostring(entry.label))
+			end
+		end
+	elseif varData.type == "check" then
+		return value and "yes" or "no"
+	end
+	return tostring(value)
+end
+
+function bd_assumptions()
+	local configTab = build.configTab
+	local input = configTab.input
+	local out, section = { }, ""
+	for _, varData in ipairs(configOptions) do
+		if varData.section then
+			section = varData.section
+		elseif varData.var then
+			local value = input[varData.var]
+			if value == nil and ALWAYS_SHOWN[varData.var] and varData.list then
+				local default = varData.list[varData.defaultIndex or 1]
+				value = default and default.val
+			end
+			local control = configTab.varControls[varData.var]
+			local relevant = control and control:GetProperty("shown")
+			if value ~= nil and value ~= false and value ~= "" and relevant then
+				out[#out + 1] = {
+					section = section,
+					label = StripEscapes(tostring(varData.label or varData.var)):gsub(":%s*$", ""),
+					value = displayValue(varData, value),
+				}
+			end
+		end
+	end
+	return out
+end
+
+-- Mod lines on equipped items and socketed jewels that PoB cannot parse
+-- (red in PoB's item tooltips). No number PoB produces includes them.
+function bd_unsupported()
+	local out = { }
+	local itemsTab = build.itemsTab
+	local function scan(slotName, item)
+		for _, list in ipairs({ item.enchantModLines, item.runeModLines, item.implicitModLines, item.explicitModLines, item.buffModLines }) do
+			for _, modLine in ipairs(list or { }) do
+				local active = not item.CheckModLineVariant or item:CheckModLineVariant(modLine)
+				if modLine.extra and active then
+					out[#out + 1] = { slot = slotName, item = tostring(item.name), line = StripEscapes(tostring(modLine.line)) }
+				end
+			end
+		end
+	end
+	-- orderedSlots includes tree jewel sockets; only allocated ones count.
+	for _, slot in ipairs(itemsTab.orderedSlots) do
+		local item = slot.selItemId and itemsTab.items[slot.selItemId]
+		local allocated = not slot.nodeId or build.spec.allocNodes[slot.nodeId]
+		if item and not slot.inactive and allocated then
+			scan(slot.slotName, item)
+		end
+	end
+	table.sort(out, function(a, b) return a.slot < b.slot or (a.slot == b.slot and a.line < b.line) end)
+	return out
 end
 
 function bd_take_log()

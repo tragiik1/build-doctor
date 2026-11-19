@@ -22,6 +22,7 @@
 #include "lj_buf.h"
 #include "lj_str.h"
 #include "lj_lib.h"
+#include "lj_utf8win.h"
 
 #if LJ_TARGET_POSIX
 #include <unistd.h>
@@ -49,7 +50,7 @@ LJLIB_CF(os_execute)
 #endif
 #else
   const char *cmd = luaL_optstring(L, 1, NULL);
-  int stat = system(cmd);
+  int stat = _lua_system(cmd);
 #if LJ_52
   if (cmd)
     return luaL_execresult(L, stat);
@@ -64,14 +65,14 @@ LJLIB_CF(os_execute)
 LJLIB_CF(os_remove)
 {
   const char *filename = luaL_checkstring(L, 1);
-  return luaL_fileresult(L, remove(filename) == 0, filename);
+  return luaL_fileresult(L, _lua_remove(filename) == 0, filename);
 }
 
 LJLIB_CF(os_rename)
 {
   const char *fromname = luaL_checkstring(L, 1);
   const char *toname = luaL_checkstring(L, 2);
-  return luaL_fileresult(L, rename(fromname, toname) == 0, fromname);
+  return luaL_fileresult(L, _lua_rename(fromname, toname) == 0, fromname);
 }
 
 LJLIB_CF(os_tmpname)
@@ -91,7 +92,7 @@ LJLIB_CF(os_tmpname)
     lj_err_caller(L, LJ_ERR_OSUNIQF);
 #else
   char buf[L_tmpnam];
-  if (tmpnam(buf) == NULL)
+  if (_lua_tmpnam(buf) == NULL)
     lj_err_caller(L, LJ_ERR_OSUNIQF);
 #endif
   lua_pushstring(L, buf);
@@ -104,7 +105,9 @@ LJLIB_CF(os_getenv)
 #if LJ_TARGET_CONSOLE
   lua_pushnil(L);
 #else
-  lua_pushstring(L, getenv(luaL_checkstring(L, 1)));  /* if NULL push nil */
+  char const* val = _lua_getenvcopy(luaL_checkstring(L, 1));
+  lua_pushstring(L, val); /* if NULL push nil */
+  _lua_getenvfree(val);
 #endif
   return 1;
 }

@@ -16,6 +16,7 @@ use std::fmt;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::{Error, Result};
 
@@ -309,11 +310,15 @@ fn check_hash(path: &str, bytes: &[u8], expected: &str) -> Result<()> {
 }
 
 fn fetch_to_file(url: &str, dest: &Path) -> Result<()> {
-    let response = ureq::get(url)
-        .header(
-            "User-Agent",
-            concat!("build-doctor/", env!("CARGO_PKG_VERSION")),
-        )
+    // The archive is several hundred MB; allow a slow connection, never forever.
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .user_agent(concat!("build-doctor/", env!("CARGO_PKG_VERSION")))
+        .timeout_connect(Some(Duration::from_secs(20)))
+        .timeout_global(Some(Duration::from_secs(30 * 60)))
+        .build()
+        .into();
+    let response = agent
+        .get(url)
         .call()
         .map_err(|e| Error::Download(format!("{url}: {e}")))?;
     let mut reader = response.into_body().into_reader();

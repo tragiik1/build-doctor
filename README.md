@@ -36,8 +36,13 @@ on Windows (override with `--data-dir` or `DOCTOR_DATA_DIR`).
 
 `doctor verify` loads every fixture build and requires PoB's freshly computed
 stats to equal the stats the PoB2 app saved in it, string for string. A build
-whose numbers keep changing between recalculations (a PoB bug) is refused with
-the lines that keep changing, never reported.
+whose numbers keep changing between recalculations (a PoB bug), or that PoB
+cannot load properly (for example an unknown passive tree), is refused with
+PoB's reason, never reported.
+
+`doctor check` also shows what every number depends on: the configuration
+the build assumes (enemy Shocked, Frozen, boss type …) and the item mods PoB
+cannot parse, which no number includes.
 
 ## Tests
 

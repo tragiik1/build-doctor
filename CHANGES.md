@@ -3,6 +3,67 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-19: Bug and limitation review
+
+**Decisions (from user):** do not report the Darkness Enthroned bug to PoB2.
+User fixtures later. Watch GGG API registration: scheduled task "GGG API
+registration watch" (Mon and Thu 18:33 Australia/Brisbane, read-only, push
+notification; timezone inferred from the repo's +10:00 timestamps).
+
+**Bugs found and fixed**
+- *Wrong numbers instead of an error for an unknown tree* (the 1.0 launch-day
+  case: a 1.0 build in a 0.5-era PoB). PoB reports it only as a popup, then
+  crashed later with "mainOutput is nil". The bridge now records PoB's popups
+  during a load and fails with PoB's own message ("Unknown Passive Tree
+  Version …").
+- *PoB dev mode.* PoB treats any non-installed copy as a developer checkout,
+  and dev mode auto-saves a temp build into its own folder whenever a build is
+  replaced (blocked by the sandbox, which raised a popup on PoB 0.17–0.19).
+  The desktop app never runs in dev mode; the bridge now turns it off after
+  start-up. Dev mode touches no calculation (all uses checked).
+- *Non-ASCII Windows paths.* PoB's own LuaJIT carries `pob-wide-crt.patch` so
+  files open under paths like `C:\Users\Noé`; ours did not. Applied PoB's
+  patch (plus a NULL fix in its non-Windows macro). See vendor/README.md.
+- *Sandbox gaps.* `io.output(file)` / `io.input(file)` could open files around
+  the `io.open` guard, and `package.loadlib` was reachable. Closed. Audit
+  result: PoB only `loadstring`s its own tree files, so a shared build cannot
+  execute code; the sandbox exists to stop side effects.
+- *No timeouts* on the PoB download and on build links. Now 20 s connect /
+  30 min for the archive, 30 s for links.
+- *Install folder trust.* `doctor check --pob X` now refuses a folder whose
+  manifest says another version.
+- Errors no longer include Lua tracebacks; PoB's output tail is shown only
+  for start-up failures.
+
+**Added (trust, not features)**
+- `check` lists the *assumptions* every number depends on: the config
+  options the build sets that PoB itself considers relevant (PoB's config-tab
+  visibility rules), plus the enemy type. Example from the 0.5.5 Shaman
+  fixture: enemy Frozen, Ignited, Shocked 20%, Chilled 10%, Cursed, Hindered,
+  Armour Broken, all at once, and custom "12% more Elemental Damage".
+- `check` lists mods PoB cannot parse on equipped items and allocated jewels
+  ("Not counted"). Every one of the 11 oracle builds has some, including
+  Headhunter, "% increased Effect of Suffixes" jewels and Runic Ward.
+- `check` warns when a build's passive tree is older than PoB's newest.
+
+**What was tested**
+- `doctor verify`: 34 exact, 0 failed (unchanged after all fixes).
+- 20 engine and library tests (new: unknown tree version fails with PoB's
+  reason; assumptions include the fixture's Frozen = yes and the enemy type;
+  unparseable mods found once each; io.output and loadlib blocked) and 3 CLI
+  unit tests, all passing.
+
+**Known limitations (not fixed, by design or for later)**
+- Reference platform is Windows. LuaJIT calls the C runtime for `pow`, `exp`,
+  `log` and friends; on Linux that is glibc instead of the MSVC UCRT the PoB
+  app uses, which could differ in the last bit. Not observed: all fixtures
+  pass on both. The doctor's numbers should be taken from Windows.
+- About 300 MB RAM per engine (PoB's data per Lua state). A parallel pool for
+  M2 must be sized by free memory, not just cores.
+- PoB accuracy is not game accuracy. The doctor now shows what PoB ignores
+  and what it assumes, but cannot know what PoB gets wrong.
+- Fixtures on the pinned PoB: still one. User builds will fix this.
+
 ## 2026-11-19: M0 precision harness (Rust)
 
 **Decisions (from user):** Windows 11; all our code in Rust, lightweight; trade
@@ -81,8 +142,8 @@ fixture builds yet, so public builds are used.
 **Open questions**
 - User's own builds as fixtures (exported from PoB2 0.23.1) when available.
 - More fixtures on 0.23.1: only 1 so far.
-- Report the Darkness Enthroned bug to PoB2? (user's call)
-- OAuth registration watch: not answered.
+- Darkness Enthroned bug: user chose not to report it.
+- OAuth registration: watched by a scheduled task.
 
 ## 2026-11-19: Research phase
 

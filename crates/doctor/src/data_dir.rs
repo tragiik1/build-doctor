@@ -34,7 +34,16 @@ impl DataDir {
             )
             .into());
         }
-        Ok(pob::Install::open(dir)?)
+        let install = pob::Install::open(&dir)?;
+        if install.version().as_str() != version {
+            return Err(format!(
+                "{} contains PoB2 {}, not {version}; reinstall with: doctor engine install --version {version}",
+                dir.display(),
+                install.version()
+            )
+            .into());
+        }
+        Ok(install)
     }
 
     /// Every installed version, oldest first.

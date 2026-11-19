@@ -16,7 +16,7 @@ mod error;
 mod install;
 mod stats;
 
-pub use engine::{Calculation, Engine, Identity};
+pub use engine::{Assumption, Calculation, Engine, Identity, UnsupportedMod};
 pub use error::{Error, Result};
 pub use install::{Install, PobVersion};
 pub use stats::{Stat, StatDiff, StatKind, StatSheet};

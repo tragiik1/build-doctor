@@ -80,6 +80,14 @@ pub fn run(install: &Install, xml: &str, all: bool) -> AnyResult<ExitCode> {
         calc.passes,
         if calc.passes == 1 { "" } else { "es" },
     );
+    if id.tree_is_outdated() {
+        println!(
+            "Warning: the build uses passive tree {}, but this PoB's newest tree is {}. \
+             PoB calculates it on the old tree, so these numbers describe an older game version.",
+            or_dash(&id.tree_version),
+            or_dash(&id.latest_tree_version),
+        );
+    }
     println!();
 
     if all {
@@ -106,6 +114,61 @@ pub fn run(install: &Install, xml: &str, all: bool) -> AnyResult<ExitCode> {
     }
     println!();
 
+    let unsupported = engine.unsupported_mods()?;
+    if !unsupported.is_empty() {
+        // PoB does not model charm and flask trigger lines at all; they are
+        // listed on request so the gear lines that matter stay visible.
+        let (usables, gear): (Vec<_>, Vec<_>) = unsupported
+            .iter()
+            .partition(|m| m.slot.starts_with("Charm") || m.slot.starts_with("Flask"));
+        println!("Not counted (PoB cannot parse these mods, so no number above includes them)");
+        for m in gear
+            .iter()
+            .chain(if all { usables.iter() } else { [].iter() })
+        {
+            println!("  {:<18} {}  ({})", m.slot, m.line, m.item);
+        }
+        if !all && !usables.is_empty() {
+            println!(
+                "  Charms and flasks: {} more lines (--all lists them)",
+                usables.len()
+            );
+        }
+        println!();
+    }
+
+    let assumptions = engine.assumptions()?;
+    if !assumptions.is_empty() {
+        println!("Assumes (PoB configuration these numbers depend on)");
+        // Campaign rewards are facts about the character, not combat
+        // assumptions; list them only on request.
+        let (facts, conditions): (Vec<_>, Vec<_>) = assumptions
+            .iter()
+            .partition(|a| a.section == "Quest Rewards");
+        let mut section = "";
+        for a in conditions {
+            if a.section != section {
+                section = &a.section;
+                println!("  {section}");
+            }
+            let label = if a.label.is_empty() {
+                "(text)"
+            } else {
+                &a.label
+            };
+            println!("    {label:<56} {}", one_line(&a.value));
+        }
+        if !facts.is_empty() && !all {
+            println!("  Quest Rewards: {} set (--all lists them)", facts.len());
+        } else if !facts.is_empty() {
+            println!("  Quest Rewards");
+            for a in facts {
+                println!("    {:<56} {}", a.label, one_line(&a.value));
+            }
+        }
+        println!();
+    }
+
     if saved.is_empty() {
         println!("The build has no saved stats to compare against.");
         return Ok(ExitCode::SUCCESS);
@@ -126,6 +189,16 @@ pub fn run(install: &Install, xml: &str, all: bool) -> AnyResult<ExitCode> {
         println!("  {diff}");
     }
     Ok(ExitCode::from(2))
+}
+
+/// Multi-line config values (custom modifiers, quest rewards) on one line.
+fn one_line(value: &str) -> String {
+    value
+        .split(['\n', '\t'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// Thousands separators, at most two decimals, trailing zeros dropped.

@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 use crate::AnyResult;
 
@@ -23,11 +24,13 @@ const SITES: &[(&str, &str)] = &[
 pub fn read_build(input: &str) -> AnyResult<String> {
     let input = input.trim();
     if let Some(url) = raw_url(input) {
-        let code = ureq::get(&url)
-            .header(
-                "User-Agent",
-                concat!("build-doctor/", env!("CARGO_PKG_VERSION")),
-            )
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .user_agent(concat!("build-doctor/", env!("CARGO_PKG_VERSION")))
+            .timeout_global(Some(Duration::from_secs(30)))
+            .build()
+            .into();
+        let code = agent
+            .get(&url)
             .call()
             .map_err(|e| format!("{url}: {e}"))?
             .into_body()

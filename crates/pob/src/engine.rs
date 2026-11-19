@@ -33,7 +33,35 @@ pub struct Identity {
     pub ascendancy: Option<String>,
     pub level: Option<u32>,
     pub tree_version: Option<String>,
+    /// The newest passive tree this PoB release knows.
+    pub latest_tree_version: Option<String>,
     pub main_skill: Option<String>,
+}
+
+impl Identity {
+    /// Whether the build uses an older passive tree than this PoB release's
+    /// newest one. PoB then calculates on the old tree, so the numbers
+    /// describe an older game version.
+    pub fn tree_is_outdated(&self) -> bool {
+        matches!((&self.tree_version, &self.latest_tree_version), (Some(t), Some(l)) if t != l)
+    }
+}
+
+/// An item mod line PoB cannot parse, so no PoB number includes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsupportedMod {
+    pub slot: String,
+    pub item: String,
+    pub line: String,
+}
+
+/// One configuration option a build's numbers depend on, as PoB's config
+/// tab shows it (for example "Is the enemy Shocked?" = yes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Assumption {
+    pub section: String,
+    pub label: String,
+    pub value: String,
 }
 
 /// PoB's settled result for one build.
@@ -71,7 +99,7 @@ impl Engine {
             .set_name("=bridge.lua")
             .call::<()>((src, lib));
         if let Err(err) = started {
-            return Err(Error::Startup(engine.describe(&err)));
+            return Err(Error::Startup(engine.describe(&err, true)));
         }
         Ok(engine)
     }
@@ -86,7 +114,7 @@ impl Engine {
         let load: mlua::Function = self.lua.globals().get("bd_load")?;
         let (saved, passes, before, after) = load
             .call::<(Option<String>, u32, Option<String>, Option<String>)>(xml)
-            .map_err(|err| Error::Pob(self.describe(&err)))?;
+            .map_err(|err| Error::Pob(self.describe(&err, false)))?;
         let Some(xml) = saved else {
             let changing = changed_lines(
                 before.as_deref().unwrap_or(""),
@@ -111,8 +139,46 @@ impl Engine {
             ascendancy: identity.get("ascendancy")?,
             level: identity.get("level")?,
             tree_version: identity.get("treeVersion")?,
+            latest_tree_version: identity.get("latestTreeVersion")?,
             main_skill: identity.get("mainSkill")?,
         })
+    }
+
+    /// The configuration the loaded build's numbers assume: every option the
+    /// build sets that PoB considers relevant to it, plus the enemy type.
+    pub fn assumptions(&self) -> Result<Vec<Assumption>> {
+        let rows: Vec<Table> = self
+            .lua
+            .globals()
+            .get::<mlua::Function>("bd_assumptions")?
+            .call(())?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(Assumption {
+                    section: row.get("section")?,
+                    label: row.get("label")?,
+                    value: row.get("value")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Mod lines on equipped items and allocated jewels that PoB ignores.
+    pub fn unsupported_mods(&self) -> Result<Vec<UnsupportedMod>> {
+        let rows: Vec<Table> = self
+            .lua
+            .globals()
+            .get::<mlua::Function>("bd_unsupported")?
+            .call(())?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(UnsupportedMod {
+                    slot: row.get("slot")?,
+                    item: row.get("item")?,
+                    line: row.get("line")?,
+                })
+            })
+            .collect()
     }
 
     /// Lines PoB printed since the last call.
@@ -124,21 +190,26 @@ impl Engine {
             .unwrap_or_default()
     }
 
-    /// A Lua error plus the tail of PoB's own output, which usually names the
-    /// real cause.
-    fn describe(&self, err: &mlua::Error) -> String {
+    /// A Lua error without its traceback, plus (when `with_log`) the tail of
+    /// PoB's own output, which names the cause when PoB fails to start.
+    fn describe(&self, err: &mlua::Error, with_log: bool) -> String {
         let message = match err {
             mlua::Error::RuntimeError(msg) => msg.clone(),
             mlua::Error::CallbackError { cause, .. } => cause.to_string(),
             other => other.to_string(),
         };
+        let message = message
+            .split("\nstack traceback:")
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
         let log = self.take_log();
-        let tail: Vec<&str> = log.iter().rev().take(5).rev().map(String::as_str).collect();
-        if tail.is_empty() {
-            message
-        } else {
-            format!("{message}\nPoB output:\n  {}", tail.join("\n  "))
+        if !with_log || log.is_empty() {
+            return message;
         }
+        let tail: Vec<&str> = log.iter().rev().take(5).rev().map(String::as_str).collect();
+        format!("{message}\nPoB output:\n  {}", tail.join("\n  "))
     }
 }
 
@@ -202,7 +273,9 @@ mod tests {
             local pipe = io.popen("echo hi")
             local env = os.getenv("PATH")
             local removed = os.remove("Launch.lua")
-            return f == nil and g == nil and exec == nil and pipe == nil and env == nil and removed == nil
+            local redirected = pcall(io.output, "doctor-sandbox-probe.txt")
+            return f == nil and g == nil and exec == nil and pipe == nil and env == nil
+                and removed == nil and not redirected and package.loadlib == nil
         "#;
         assert!(engine.lua.load(probe).eval::<bool>().unwrap());
         assert!(
@@ -233,9 +306,8 @@ mod tests {
     #[test]
     #[ignore = "needs a PoB2 install in DOCTOR_POB_DIR"]
     fn fresh_engines_agree_exactly() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/builds");
         for name in ["maxroll_gd79010q.xml", "7occvtBuTEOp.xml"] {
-            let xml = std::fs::read_to_string(dir.join(name)).unwrap();
+            let xml = fixture(name);
             let first = engine().load(&xml).unwrap();
             assert!(!first.stats.is_empty());
             for _ in 0..4 {
@@ -243,6 +315,58 @@ mod tests {
                 assert_eq!(first.stats.diff(&again.stats), [], "{name}");
             }
         }
+    }
+
+    fn fixture(name: &str) -> String {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/builds");
+        std::fs::read_to_string(dir.join(name)).unwrap()
+    }
+
+    /// A build from a passive tree PoB does not know (what a 1.0 build is to
+    /// a 0.5-era PoB) must fail with PoB's reason, not produce numbers.
+    #[test]
+    #[ignore = "needs a PoB2 install in DOCTOR_POB_DIR"]
+    fn rejects_unknown_tree_version() {
+        let xml =
+            fixture("maxroll_gd79010q.xml").replace("treeVersion=\"0_5\"", "treeVersion=\"9_9\"");
+        let err = engine().load(&xml).unwrap_err();
+        assert!(
+            matches!(&err, Error::Pob(msg) if msg.contains("Unknown Passive Tree Version")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "needs a PoB2 install in DOCTOR_POB_DIR"]
+    fn reports_config_assumptions() {
+        let engine = engine();
+        engine.load(&fixture("maxroll_gd79010q.xml")).unwrap();
+        let assumptions = engine.assumptions().unwrap();
+        let frozen = assumptions
+            .iter()
+            .find(|a| a.label.contains("Frozen"))
+            .expect("Frozen assumption");
+        assert_eq!(frozen.value, "yes");
+        assert!(assumptions.iter().any(|a| a.label.contains("Boss")));
+    }
+
+    #[test]
+    #[ignore = "needs a PoB2 install in DOCTOR_POB_DIR"]
+    fn lists_mods_pob_cannot_parse() {
+        let engine = engine();
+        engine.load(&fixture("maxroll_gd79010q.xml")).unwrap();
+        let unsupported = engine.unsupported_mods().unwrap();
+        assert!(
+            unsupported
+                .iter()
+                .any(|m| m.slot == "Body Armour" && m.line.contains("Runic Ward")),
+            "{unsupported:?}"
+        );
+        // Each allocated jewel or slot appears once, not once per lookup path.
+        let mut keys: Vec<_> = unsupported.iter().map(|m| (&m.slot, &m.line)).collect();
+        let total = keys.len();
+        keys.dedup();
+        assert_eq!(keys.len(), total);
     }
 
     #[test]
