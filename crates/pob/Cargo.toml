@@ -1,0 +1,24 @@
+[package]
+name = "pob"
+description = "Runs Path of Building PoE2's own calculation code, headless and sandboxed."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64.workspace = true
+flate2.workspace = true
+mlua.workspace = true
+roxmltree.workspace = true
+sha1_smol.workspace = true
+thiserror.workspace = true
+ureq.workspace = true
+zip.workspace = true
+
+[build-dependencies]
+cc.workspace = true
+
+[lints]
+workspace = true

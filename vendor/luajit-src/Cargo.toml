@@ -1,0 +1,18 @@
+[package]
+name = "luajit-src"
+version = "210.7.5+2460b3f"
+authors = ["Aleksandr Orlenko <zxteam@protonmail.com>"]
+edition = "2024"
+repository = "https://github.com/mlua-rs/luajit-src-rs"
+keywords = ["lua", "luajit"]
+readme = "README.md"
+license = "MIT"
+description = """
+Sources of LuaJIT 2.1 and logic to build it.
+"""
+exclude = ["/luajit2/doc", "/luajit2/etc"]
+
+
+[dependencies]
+cc = "1.2"
+which = "8.0"

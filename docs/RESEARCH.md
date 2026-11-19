@@ -87,27 +87,20 @@ PoB does every number. The doctor only does three things: generates candidate ch
 
 ### 2.2 Architecture
 
+Revised on 2026-11-19 after the go-ahead: everything we write is Rust (your call), PoB stays unmodified Lua.
+
 ```
-PoB2 (unmodified, pinned release tag)  +  LuaJIT (pinned commit)  +  lua-utf8
-        ▲   bridge.lua: load build, apply change set, settle, read outputs
-        │   (JSON lines over stdin/stdout, one build loaded per worker)
-Worker pool  (N = cores − 1 processes, each keeps the build warm)
-        ▲
-Python core
-  pob/       pool, protocol, version guard (PoB data version vs game version)
-  model/     build state, candidate generators (nodes, paths, supports, gear mods, jewels)
-  engine/    objective, marginal evaluation, search (tree local search / beam, budget knapsack)
-  market/    poe.ninja + GGG exchange prices, trade link builder, optional rate-limited fetcher
-  export/    in-game Build Planner .build writer, PoB code writer
-  explain/   templated plain-language findings; MCP server so Claude can query the engine
-  web/       FastAPI + server-rendered pages (HTMX), localhost only
-SQLite: price cache, run history, receipts
-tests/fixtures/*.xml: real PoB codes with embedded PoB-app stats (the oracle)
+crates/pob      PoB2 headless: embeds LuaJIT (exact commit the PoB2 app ships) and
+                lua-utf8 in-process, runs PoB's own HeadlessWrapper.lua in a sandbox,
+                loads builds, settles, returns PoB's saved stats. Installs PoB releases
+                from GitHub and verifies every file against PoB's own SHA-1 manifest.
+crates/doctor   CLI today (check, verify, engine). Later: search/ranking engine,
+                market data, trade links, Build Planner export, localhost UI, MCP.
+fixtures/       real builds saved by the PoB2 app; their embedded stats are the oracle
+vendor/         pinned LuaJIT and luautf8 sources (see vendor/README.md)
 ```
 
-**Stack and why.** Python 3.12 for the orchestration. Search, optimisation and HTTP are quick to write there, and it's easy for you to maintain. The Lua side is a thin shim, never a fork, so a PoB update is a version bump plus the fixture run. A localhost web page gives dense tables and a trade-off chart with no installer. I rejected two alternatives:
-- Reimplementing PoB's maths in Python breaks the "computed, never guessed" rule.
-- Embedding Lua via `lupa` would bundle a LuaJIT too old for PoB2's syntax.
+**Why in-process Lua instead of worker processes:** one 4 MB binary, no luajit.exe to ship on Windows, and an engine per thread for parallel what-ifs. The engine never changes the process working directory: PoB's relative file reads are resolved by the bridge.
 
 ### 2.3 Objective and ranking
 

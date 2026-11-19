@@ -1,0 +1,99 @@
+# Fixture builds for `doctor verify`.
+#
+# Each file is a public build saved by the Path of Building PoE2 desktop app,
+# so the <PlayerStat>, <MinionStat> and <FullDPSSkill> values inside it are
+# the app's own output. On every PoB version in `exact_on`, the doctor must
+# reproduce all of them string-for-string.
+#
+# `exact_on` was found with `doctor verify --sweep` against the PoB2 releases
+# 0.16.0, 0.17.1, 0.18.0, 0.19.0, 0.20.0, 0.21.0, 0.21.1, 0.22.0, 0.23.0 and
+# 0.23.1 (2026-11-19). A build only reproduces on the release(s) whose
+# calculations match the one that saved it, which is why the lists differ.
+#
+# A quarantined fixture is kept and reported but not used as an oracle; the
+# reason must say why.
+
+[[fixture]]
+file = "builds/maxroll_gd79010q.xml"
+source = "https://maxroll.gg/poe2/pob/gd79010q (forum Build of the Week, 0.5.5)"
+build = "Snap Shaman (Druid), level 94"
+exact_on = ["0.22.0", "0.23.0", "0.23.1"]
+
+[[fixture]]
+file = "builds/1B7QzZH4WI31.xml"
+source = "https://pobb.in/1B7QzZH4WI31"
+build = "Ice Shot Deadeye (Ranger), level 99"
+exact_on = ["0.20.0", "0.21.0", "0.21.1", "0.22.0"]
+
+[[fixture]]
+file = "builds/NMF0l4yHDix9.xml"
+source = "https://pobb.in/NMF0l4yHDix9"
+build = "Ember Fusillade Gemling Legionnaire (Mercenary), level 96"
+exact_on = ["0.20.0", "0.21.0", "0.21.1"]
+
+[[fixture]]
+file = "builds/PHReoz4iI90N.xml"
+source = "https://pobb.in/PHReoz4iI90N"
+build = "Spark Infernalist (Witch), level 96"
+exact_on = ["0.20.0", "0.21.0"]
+
+[[fixture]]
+file = "builds/e7sIg_r6915z.xml"
+source = "https://pobb.in/e7sIg_r6915z"
+build = "Explosive Grenade Deadeye (Ranger), level 93"
+exact_on = ["0.17.1", "0.18.0", "0.19.0"]
+
+[[fixture]]
+file = "builds/7occvtBuTEOp.xml"
+source = "https://pobb.in/7occvtBuTEOp"
+build = "Navira, the Last Mirage Disciple of Varashta (Sorceress), level 97"
+exact_on = ["0.20.0", "0.21.0"]
+
+[[fixture]]
+file = "builds/MEY40cJToiDI.xml"
+source = "https://pobb.in/MEY40cJToiDI"
+build = "Arc Totem Gemling Legionnaire (Mercenary), level 92"
+# Unstable on 0.22.0 and later: PoB2 bug with Darkness Enthroned compounding
+# socketed rune effects on every recalculation (see CHANGES.md).
+exact_on = ["0.21.0", "0.21.1"]
+
+[[fixture]]
+file = "builds/N1xMbRU4ZISE.xml"
+source = "https://pobb.in/N1xMbRU4ZISE"
+build = "Ice Strike Martial Artist (Monk), level 96"
+exact_on = ["0.17.1", "0.18.0", "0.19.0"]
+
+[[fixture]]
+file = "builds/OkpIHJAvHQ_R.xml"
+source = "https://pobb.in/OkpIHJAvHQ_R"
+build = "Elemental Storm Stormweaver (Sorceress), level 93"
+exact_on = ["0.17.1", "0.18.0", "0.19.0", "0.20.0", "0.21.0"]
+
+[[fixture]]
+file = "builds/WbdBLfSqPxVN.xml"
+source = "https://pobb.in/WbdBLfSqPxVN"
+build = "Gemling Legionnaire (Mercenary), level 96"
+exact_on = ["0.19.0", "0.20.0", "0.21.0", "0.21.1"]
+
+[[fixture]]
+file = "builds/_hu1-w85QHxP.xml"
+source = "https://pobb.in/_hu1-w85QHxP"
+build = "Arc Gemling Legionnaire (Mercenary), level 94"
+exact_on = ["0.20.0", "0.21.0", "0.21.1"]
+
+[[fixture]]
+file = "builds/RPK1kGgJDz_l.xml"
+source = "https://pobb.in/RPK1kGgJDz_l"
+build = "Thorns Gemling Legionnaire (Mercenary), level 98"
+quarantine = """No tested release reproduces it (closest: 4 stats on 0.23.x, all \
+consistent with one '+(13-17)% to Cold and Chaos Resistances' roll being 1 point \
+apart). The item carries conflicting roll data ({range:0.75} inline vs \
+<ModRange range=\"0.167\">), so the saved stats cannot be tied to a known PoB."""
+
+[[fixture]]
+file = "builds/tCrVWpJmk6bC.xml"
+source = "https://pobb.in/tCrVWpJmk6bC"
+build = "Twister Spirit Walker (Huntress), level 90"
+quarantine = """No tested release reproduces it (closest: 14 stats on 0.20.0 to \
+0.21.1). Probably saved by a PoB build outside the tested set (beta, dev, or an \
+untested patch release)."""
