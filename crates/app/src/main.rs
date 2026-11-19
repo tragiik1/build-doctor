@@ -83,6 +83,7 @@ async fn plan(
     kept: Vec<String>,
     goal: Goal,
     steps: usize,
+    max_loss: Option<f64>,
 ) -> CommandResult<Plan> {
     let (pool, xml) = (pool(&state)?, build(&state)?);
     let cancel = Arc::clone(&state.cancel);
@@ -91,6 +92,7 @@ async fn plan(
         kept,
         goal,
         steps: steps.clamp(1, 12),
+        max_other_loss: max_loss.map(|v| v.max(0.0)),
         ..PlanOptions::default()
     };
     blocking(move || {

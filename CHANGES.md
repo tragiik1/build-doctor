@@ -3,6 +3,28 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-19: Plan keeps the other side from falling (user report)
+
+**Problem (from the user's first real run, Blood Mage):** step 1 of the
+damage plan dropped Mind Over Matter for +17.3% DPS at −57.5% EHP and
+−57.3% smallest max hit. The damage goal accepted any survival loss.
+
+**What changed**
+- `PlanOptions::max_other_loss` (default 0%): over the whole plan, the side
+  not being optimised may not fall below its starting value by more than
+  this (EHP and smallest max hit for the damage goal, damage for the
+  survival goal), with 0.05% rounding slack. Applied to screened pairs
+  before exact trials and to every exact trial.
+- CLI `doctor todo --max-loss <percent|any>`; app: "Survival loss allowed:
+  None · 5% · Any" (reads "Damage loss" for the survival goal).
+
+**What was tested**
+- Unit test for the guard (strict, tolerant, any, survival goal).
+- Shaman fixture, 3 steps with the default: +52.8% DPS with EHP +1.0% and
+  smallest max hit +1.1%. 34/34 exact; all tests pass.
+- Cross-check from the user: poe.ninja's figures for their character (life,
+  mana, spirit, armour, evasion, resistances, EHP, max hits) match the app.
+
 ## 2026-11-19: Faster PoB install with progress
 
 **Problem (reported):** the app's first-start install sat for 15+ minutes

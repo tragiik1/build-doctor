@@ -43,6 +43,11 @@ pub struct PlanOptions {
     pub goal: Goal,
     pub max_distance: u32,
     pub steps: usize,
+    /// How much of the other side the plan may give up, in percent of the
+    /// starting value over the whole plan: survival (Total EHP and smallest
+    /// max hit) when the goal is damage, damage when the goal is survival.
+    /// `None` allows any loss.
+    pub max_other_loss: Option<f64>,
 }
 
 impl Default for PlanOptions {
@@ -52,6 +57,40 @@ impl Default for PlanOptions {
             goal: Goal::Damage,
             max_distance: 6,
             steps: 5,
+            max_other_loss: Some(0.0),
+        }
+    }
+}
+
+/// Rounding slack on the loss limit, in percent: PoB numbers that move by
+/// less than this are treated as unchanged.
+const LOSS_SLACK: f64 = 0.05;
+
+/// Keeps the side the plan is not optimising from falling below its start.
+#[derive(Debug, Clone, Copy)]
+struct Guard {
+    goal: Goal,
+    uses_full_dps: bool,
+    start: Summary,
+    max_loss: Option<f64>,
+}
+
+impl Guard {
+    fn allows(&self, s: &Summary) -> bool {
+        let Some(max_loss) = self.max_loss else {
+            return true;
+        };
+        let floor = -(max_loss + LOSS_SLACK);
+        match self.goal {
+            Goal::Damage => {
+                pct(self.start.ehp, s.ehp) >= floor && pct(self.start.min_hit, s.min_hit) >= floor
+            }
+            Goal::Survival => {
+                pct(
+                    damage(self.uses_full_dps, &self.start),
+                    damage(self.uses_full_dps, s),
+                ) >= floor
+            }
         }
     }
 }
@@ -75,6 +114,8 @@ pub struct Plan {
     pub kept_conditions: usize,
     pub total_conditions: usize,
     pub start: Summary,
+    /// The loss limit the plan kept to (see [`PlanOptions::max_other_loss`]).
+    pub max_other_loss: Option<f64>,
     pub steps: Vec<PlanStep>,
     /// Options screened per step (additions, removals).
     pub screened: (usize, usize),
@@ -173,6 +214,12 @@ pub fn plan(
             goal,
             uses_full_dps,
             max_distance: options.max_distance,
+            guard: Guard {
+                goal,
+                uses_full_dps,
+                start,
+                max_loss: options.max_other_loss,
+            },
         };
         let Some(trial) = search.best_swap(
             &current,
@@ -217,6 +264,7 @@ pub fn plan(
         kept_conditions: conditions.len() - dropped.len(),
         total_conditions: conditions.len(),
         start,
+        max_other_loss: options.max_other_loss,
         steps,
         screened,
         rejected_warnings: rejected,
@@ -303,6 +351,7 @@ struct Search<'p> {
     goal: Goal,
     uses_full_dps: bool,
     max_distance: u32,
+    guard: Guard,
 }
 
 impl Search<'_> {
@@ -320,6 +369,7 @@ impl Search<'_> {
             goal,
             uses_full_dps,
             max_distance,
+            guard,
         } = *self;
         phase("Screening every passive within reach");
         // Screen, split over the pool.
@@ -387,7 +437,12 @@ impl Search<'_> {
             |e, (remove, add)| e.tree_screen_change(&remove, &add),
         )?;
         for (pair, summary) in pairs.iter_mut().zip(&combined) {
-            pair.screened_gain = gain(summary);
+            // Swaps that break the loss limit drop out before exact trials.
+            pair.screened_gain = if guard.allows(summary) {
+                gain(summary)
+            } else {
+                0.0
+            };
         }
         pairs.retain(|p| p.screened_gain > 0.0);
         pairs.sort_by(|a, b| b.screened_gain.total_cmp(&a.screened_gain));
@@ -423,9 +478,13 @@ impl Search<'_> {
                 rejected.extend(trial.new_warnings.iter().cloned());
                 continue;
             }
+            let after = Summary::from_stats(&trial.calc.stats);
+            if !guard.allows(&after) {
+                continue;
+            }
             let g = pct(
                 goal_value(goal, uses_full_dps, &exact_base),
-                goal_value(goal, uses_full_dps, &Summary::from_stats(&trial.calc.stats)),
+                goal_value(goal, uses_full_dps, &after),
             );
             if g >= MIN_GAIN && best.as_ref().is_none_or(|(b, _)| g > *b) {
                 best = Some((g, trial));
@@ -465,6 +524,64 @@ mod tests {
             cost: nodes.len() as u32,
             screened: Summary::default(),
         }
+    }
+
+    #[test]
+    fn guard_limits_the_other_side() {
+        let start = Summary {
+            combined_dps: 100.0,
+            ehp: 1000.0,
+            min_hit: 500.0,
+            ..Summary::default()
+        };
+        let strict = Guard {
+            goal: Goal::Damage,
+            uses_full_dps: false,
+            start,
+            max_loss: Some(0.0),
+        };
+        let loses_ehp = Summary {
+            combined_dps: 150.0,
+            ehp: 500.0,
+            ..start
+        };
+        let tiny_loss = Summary {
+            combined_dps: 150.0,
+            ehp: 999.9,
+            ..start
+        };
+        assert!(!strict.allows(&loses_ehp));
+        assert!(
+            strict.allows(&tiny_loss),
+            "rounding-level changes are not losses"
+        );
+        assert!(
+            Guard {
+                max_loss: Some(60.0),
+                ..strict
+            }
+            .allows(&loses_ehp)
+        );
+        assert!(
+            Guard {
+                max_loss: None,
+                ..strict
+            }
+            .allows(&loses_ehp)
+        );
+        let survival = Guard {
+            goal: Goal::Survival,
+            ..strict
+        };
+        assert!(!survival.allows(&Summary {
+            combined_dps: 90.0,
+            ..start
+        }));
+        assert!(survival.allows(&Summary {
+            combined_dps: 100.0,
+            ehp: 10.0,
+            ..start
+        }));
     }
 
     #[test]

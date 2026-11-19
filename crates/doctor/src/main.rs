@@ -81,6 +81,11 @@ enum Command {
         /// Consider nodes up to this many points away.
         #[arg(long, default_value_t = 6)]
         max_distance: u32,
+        /// How much of the side you are not optimising the plan may give up,
+        /// in percent of its starting value: survival when the goal is
+        /// damage, damage when it is survival. A number, or "any".
+        #[arg(long, default_value = "0", value_parser = parse_max_loss)]
+        max_loss: MaxLoss,
         /// At most this many steps.
         #[arg(long, default_value_t = 5)]
         steps: usize,
@@ -149,6 +154,22 @@ fn installed(data: &pob::DataDir, version: &str) -> AnyResult<pob::Install> {
 fn print_json(value: &impl serde::Serialize) -> AnyResult<ExitCode> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(ExitCode::SUCCESS)
+}
+
+/// `--max-loss`: a percentage, or `None` for "any".
+#[derive(Debug, Clone, Copy)]
+struct MaxLoss(Option<f64>);
+
+fn parse_max_loss(text: &str) -> Result<MaxLoss, String> {
+    if text.eq_ignore_ascii_case("any") {
+        return Ok(MaxLoss(None));
+    }
+    match text.trim_end_matches('%').parse::<f64>() {
+        Ok(v) if v >= 0.0 => Ok(MaxLoss(Some(v))),
+        _ => Err(format!(
+            "expected a percentage like 5, or \"any\", not {text:?}"
+        )),
+    }
 }
 
 fn default_jobs() -> usize {
@@ -254,6 +275,7 @@ fn run(cli: Cli) -> AnyResult<ExitCode> {
             goal,
             keep,
             max_distance,
+            max_loss,
             steps,
             export,
             pob,
@@ -269,6 +291,7 @@ fn run(cli: Cli) -> AnyResult<ExitCode> {
                 },
                 max_distance,
                 steps,
+                max_other_loss: max_loss.0,
             };
             if cli.json {
                 return print_json(&analysis::plan(&pool, &xml, &options, &|_| {}, &|| false)?);

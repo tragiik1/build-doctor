@@ -15,6 +15,7 @@ const state = {
   realisticKept: null,   // kept set the realistic result was computed for
   goal: "damage",
   steps: 5,
+  maxLoss: 0,            // % of the other side the plan may give up; null = any
   plan: null,
   planProgress: null,
   copied: false,
@@ -109,7 +110,7 @@ async function runRealistic() {
 async function runPlan() {
   state.plan = null;
   state.planProgress = { step: 1, steps: state.steps, phase: "Starting" };
-  const result = await run("Building your passive tree plan", "", () => invoke("plan", { kept: [...state.kept], goal: state.goal, steps: state.steps }));
+  const result = await run("Building your passive tree plan", "", () => invoke("plan", { kept: [...state.kept], goal: state.goal, steps: state.steps, maxLoss: state.maxLoss }));
   state.planProgress = null;
   if (result) state.plan = result;
   render();
@@ -403,6 +404,8 @@ function renderPlan() {
     <div class="toolbar" style="margin-bottom:16px">
       <span class="field-label">Goal</span>
       <div class="seg">${[["damage", "Damage"], ["survival", "Survival"]].map(([v, l]) => `<button class="${state.goal === v ? "on" : ""}" data-goal="${v}">${l}</button>`).join("")}</div>
+      <span class="field-label" style="margin-left:8px">${state.goal === "damage" ? "Survival" : "Damage"} loss allowed</span>
+      <div class="seg">${[[0, "None"], [5, "5%"], [null, "Any"]].map(([v, l]) => `<button class="${state.maxLoss === v ? "on" : ""}" data-loss="${v ?? "any"}">${l}</button>`).join("")}</div>
       <span class="field-label" style="margin-left:8px">Steps</span>
       <div class="seg">${[3, 5, 8].map((n) => `<button class="${state.steps === n ? "on" : ""}" data-steps="${n}">${n}</button>`).join("")}</div>
       <span class="spacer"></span>
@@ -432,7 +435,7 @@ function renderPlan() {
         <div class="tile"><div class="label">Total EHP</div><div class="value">${fmt(end.ehp)}</div><div class="sub ${tone(pct(p.start.ehp, end.ehp))}">${signed(pct(p.start.ehp, end.ehp))}</div></div>
         <div class="tile"><div class="label">Smallest max hit</div><div class="value">${fmt(end.minHit)}</div><div class="sub ${tone(pct(p.start.minHit, end.minHit))}">${signed(pct(p.start.minHit, end.minHit))}</div></div>
       </div>`
-    : `<div class="panel empty">No point-neutral swap within reach improves your ${p.goal} by 0.1% or more. Your tree is already locally optimal for this goal.</div>`;
+    : `<div class="panel empty">No point-neutral swap within reach improves your ${p.goal} by 0.1% or more${p.maxOtherLoss != null ? ` without costing ${p.goal === "damage" ? "survival" : "damage"} beyond the limit you set` : ""}.</div>`;
 
   const steps = p.steps.map((s, i) => `
     <div class="panel step">
@@ -455,6 +458,7 @@ function renderPlan() {
     </div>
     <div class="note">
       Each step was applied to your tree and fully recalculated by Path of Building, then reloaded fresh, as importing it would. No step spends extra points or raises a Path of Building warning.
+      ${p.maxOtherLoss === 0 ? ` ${p.goal === "damage" ? "Survival" : "Damage"} never drops below where it started.` : p.maxOtherLoss == null ? ` Any ${p.goal === "damage" ? "survival" : "damage"} loss was allowed.` : ` ${p.goal === "damage" ? "Survival" : "Damage"} stays within ${p.maxOtherLoss}% of where it started.`}
       ${p.keptConditions < p.totalConditions ? ` Judged without the ${p.totalConditions - p.keptConditions} conditions you did not keep.` : ""}
       New path attribute nodes use Path of Building's default attribute; pick what you need in game.
       ${p.cancelled ? " Stopped early on request." : ""}
@@ -482,7 +486,7 @@ function delta(label, change) {
 // ---------------------------------------------------------------- events
 
 document.addEventListener("click", async (event) => {
-  const target = event.target.closest("[data-action],[data-view],[data-goal],[data-steps]");
+  const target = event.target.closest("[data-action],[data-view],[data-goal],[data-steps],[data-loss]");
   if (!target || target.getAttribute("aria-disabled") === "true") return;
   if (target.dataset.view) {
     state.view = target.dataset.view;
@@ -493,6 +497,7 @@ document.addEventListener("click", async (event) => {
   }
   if (target.dataset.goal) { state.goal = target.dataset.goal; render(); return; }
   if (target.dataset.steps) { state.steps = Number(target.dataset.steps); render(); return; }
+  if (target.dataset.loss) { state.maxLoss = target.dataset.loss === "any" ? null : Number(target.dataset.loss); render(); return; }
   switch (target.dataset.action) {
     case "install": return installEngine();
     case "load": {
