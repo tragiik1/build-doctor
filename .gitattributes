@@ -1,0 +1,2 @@
+# Fixture builds are byte-exact app output; never convert their line endings.
+fixtures/builds/*.xml -text
