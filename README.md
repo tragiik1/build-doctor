@@ -9,9 +9,11 @@ ships, and is checked against builds saved by the PoB2 app.
 
 ## Desktop app
 
-Download `build-doctor.exe` from the latest successful CI run (repository
-**Actions** tab → newest run → **Artifacts** → `build-doctor-windows`), unzip
-and run it. Windows 11 already has the WebView2 runtime it uses. On first
+Download `build-doctor.exe` from
+[the latest release](https://github.com/tragiik1/build-doctor/releases/latest)
+and run it. It updates itself: when a newer release exists it offers
+"Update and restart", checks the download's SHA-256 against the release and
+swaps itself in place. Windows 11 already has the WebView2 runtime it uses. On first
 start it offers to install Path of Building (one download, ~390 MB, every
 file verified). Then paste a PoB code or link:
 

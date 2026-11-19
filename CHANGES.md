@@ -3,6 +3,33 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-19: Versions, releases and self-update
+
+**Decision (from user):** make the repository public so the app can update
+itself without credentials. (Changing visibility is done by the user on
+GitHub.) Checked before: no personal data in the tree; every commit is
+authored with the GitHub no-reply address.
+
+**What changed**
+- Every CI build is stamped `0.1.<run number>` and its commit
+  (`BUILD_DOCTOR_VERSION`, `BUILD_DOCTOR_COMMIT`); local builds say
+  `0.1.0-dev` and never offer updates. The app shows its version.
+- CI `release` job: every green push to `main` publishes release
+  `v0.1.<run>` marked Latest, with `build-doctor.exe`, `doctor.exe` and
+  `version.json` (version, commit, SHA-256 of the exe).
+- `crates/app/src/update.rs`: on start, reads
+  `releases/latest/download/version.json`; if its build number is higher,
+  the app offers "Update and restart", downloads the exe with progress,
+  checks the SHA-256, renames the running exe to `.old`, moves the new one
+  in, restarts; `.old` is removed on the next start. Offline or errors: the
+  check stays silent.
+
+**What was tested**
+- Unit tests: build numbers, side-file names, SHA-256 matches `sha256sum`.
+- Update notice rendered with mocked data. The real update path needs a
+  published release and a public repo; it runs for the first time after
+  this is merged.
+
 ## 2026-11-19: Plan keeps the other side from falling (user report)
 
 **Problem (from the user's first real run, Blood Mage):** step 1 of the
@@ -187,8 +214,8 @@ with no progress. It downloaded GitHub's archive of the whole PoB repository
 
 **Decisions (from user):** do not report the Darkness Enthroned bug to PoB2.
 User fixtures later. Watch GGG API registration: scheduled task "GGG API
-registration watch" (Mon and Thu 18:33 Australia/Brisbane, read-only, push
-notification; timezone inferred from the repo's +10:00 timestamps).
+registration watch" (twice a week, read-only, push
+notification).
 
 **Bugs found and fixed**
 - *Wrong numbers instead of an error for an unknown tree* (the 1.0 launch-day

@@ -6,6 +6,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod update;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -106,6 +108,43 @@ async fn plan(
     .await
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppInfo {
+    version: String,
+    commit: Option<&'static str>,
+}
+
+#[tauri::command]
+fn app_info() -> AppInfo {
+    AppInfo {
+        version: update::version(),
+        commit: update::commit(),
+    }
+}
+
+/// The newer release, if there is one.
+#[tauri::command]
+async fn check_update() -> CommandResult<Option<update::Release>> {
+    tauri::async_runtime::spawn_blocking(update::check)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Downloads and installs `release`, then restarts into it.
+#[tauri::command]
+async fn install_update(app: AppHandle, release: update::Release) -> CommandResult<()> {
+    let emitter = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        update::install(&release, &|done, total| {
+            let _ = emitter.emit("update-progress", (done, total));
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    app.restart();
+}
+
 #[tauri::command]
 fn cancel_plan(state: State<'_, AppState>) {
     state.cancel.store(true, Ordering::SeqCst);
@@ -149,6 +188,7 @@ async fn blocking<T: Send + 'static>(
 }
 
 fn main() {
+    update::clean_up();
     let data = match DataDir::new(None) {
         Ok(data) => data,
         Err(err) => {
@@ -169,7 +209,10 @@ fn main() {
             load_build,
             realistic,
             plan,
-            cancel_plan
+            cancel_plan,
+            app_info,
+            check_update,
+            install_update
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|err| {

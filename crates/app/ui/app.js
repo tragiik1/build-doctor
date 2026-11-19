@@ -19,6 +19,8 @@ const state = {
   plan: null,
   planProgress: null,
   copied: false,
+  app: null,             // { version, commit }
+  update: null,          // { release, status: "available" | "installing" | "error", progress, error }
 };
 
 // ---------------------------------------------------------------- helpers
@@ -72,6 +74,52 @@ async function run(title, detail, task) {
     state.busy = null;
     render();
   }
+}
+
+async function checkForUpdate() {
+  state.app = await invoke("app_info");
+  render();
+  try {
+    const release = await invoke("check_update");
+    if (release) state.update = { release, status: "available", progress: null };
+  } catch {
+    // Offline or GitHub unavailable: say nothing, try again next start.
+  }
+  render();
+}
+
+async function installUpdate() {
+  state.update = { ...state.update, status: "installing", progress: 0, error: null };
+  render();
+  try {
+    await invoke("install_update", { release: state.update.release });
+  } catch (err) {
+    state.update = { ...state.update, status: "error", error: String(err) };
+    render();
+  }
+}
+
+listen("update-progress", (event) => {
+  const [done, total] = event.payload;
+  if (state.update) state.update.progress = total ? done / total : null;
+  render();
+});
+
+function renderUpdate() {
+  const u = state.update;
+  if (!u) return "";
+  if (u.status === "installing") {
+    const pctText = u.progress != null ? ` ${Math.round(u.progress * 100)}%` : "";
+    return `<div class="update">Updating to ${esc(u.release.version)}…${pctText}<div class="track ${u.progress == null ? "indeterminate" : ""}"><i style="${u.progress == null ? "" : `width:${(u.progress * 100).toFixed(1)}%`}"></i></div></div>`;
+  }
+  if (u.status === "error") {
+    return `<div class="update">Update failed: ${esc(u.error)} <button class="link" data-action="update">Try again</button></div>`;
+  }
+  return `<div class="update">Version ${esc(u.release.version)} is available <button class="link accent" data-action="update">Update and restart</button></div>`;
+}
+
+function versionLabel() {
+  return state.app ? `Build Doctor ${esc(state.app.version)}` : "";
 }
 
 async function refreshEngine() {
@@ -181,13 +229,14 @@ function renderStart() {
       <p>Paste a Path of Building code, or a pobb.in, poe.ninja, maxroll or poe2db link.</p>
       <textarea class="paste" id="paste" spellcheck="false" placeholder="Paste here" ${state.busy || !ready ? "disabled" : ""}></textarea>
       <div class="start-actions">
-        <span class="engine-line">${engineLine}</span>
+        <span class="engine-line">${engineLine}${state.app ? ` · ${versionLabel()}` : ""}</span>
         ${ready
           ? `<button class="btn primary" data-action="load" ${state.busy ? 'aria-disabled="true"' : ""}>Analyse build</button>`
           : `<button class="btn primary" data-action="install" ${state.busy || !e ? 'aria-disabled="true"' : ""}>Install Path of Building</button>`}
       </div>
       ${state.busy ? renderBusy() : ""}
       ${state.error ? `<div class="error">${esc(state.error)}</div>` : ""}
+      ${state.update ? `<div style="margin-top:18px">${renderUpdate()}</div>` : ""}
     </div></div>`;
 }
 
@@ -221,7 +270,9 @@ function renderRail() {
         ${nav.map(([id, label, note]) => `<button class="${state.view === id ? "active" : ""}" data-view="${id}">${label}<small>${esc(note)}</small></button>`).join("")}
       </nav>
       <div class="rail-foot">
+        ${renderUpdate()}
         <span class="engine">Path of Building ${esc(b.pobVersion)} · tree ${esc(b.treeVersion ?? "–")}</span>
+        <span class="engine">${versionLabel()}</span>
         <button class="link" data-action="reset">Load another build</button>
       </div>
     </aside>`;
@@ -500,6 +551,7 @@ document.addEventListener("click", async (event) => {
   if (target.dataset.loss) { state.maxLoss = target.dataset.loss === "any" ? null : Number(target.dataset.loss); render(); return; }
   switch (target.dataset.action) {
     case "install": return installEngine();
+    case "update": return installUpdate();
     case "load": {
       const input = document.getElementById("paste").value.trim();
       if (input) return loadBuild(input);
@@ -535,4 +587,5 @@ document.addEventListener("keydown", (event) => {
 });
 
 refreshEngine().catch((err) => { state.error = String(err); render(); });
+checkForUpdate().catch(() => {});
 render();

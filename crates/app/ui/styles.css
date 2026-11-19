@@ -73,6 +73,9 @@ input, textarea, button, select { font: inherit; color: inherit; }
 .rail-foot .engine { color: var(--text-3); font-size: 12px; }
 .link { all: unset; cursor: pointer; color: var(--text-2); font-size: 12.5px; }
 .link:hover { color: var(--text); }
+.link.accent { color: var(--accent); font-weight: 600; }
+.update { color: var(--text-2); font-size: 12.5px; line-height: 1.6; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); }
+.update .track { margin-top: 8px; }
 
 .main { overflow-y: auto; min-height: 0; }
 .page { max-width: 1160px; padding: 30px 40px 48px; }
