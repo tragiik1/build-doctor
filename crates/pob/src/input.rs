@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::AnyResult;
+use crate::{Error, Result};
 
 /// Build-sharing sites PoB2 itself imports from, mapped to their raw-code
 /// endpoints (same mapping as PoB2's `Modules/BuildSiteTools.lua`).
@@ -21,7 +21,9 @@ const SITES: &[(&str, &str)] = &[
     ("https://poe2db.tw/pob/", "https://poe2db.tw/pob/{id}/raw"),
 ];
 
-pub fn read_build(input: &str) -> AnyResult<String> {
+/// Turns what the user pasted (a PoB code, build XML, a path to either, or a
+/// pobb.in / poe.ninja / maxroll / poe2db link) into build XML.
+pub fn read_build(input: &str) -> Result<String> {
     let input = input.trim();
     if let Some(url) = raw_url(input) {
         let agent: ureq::Agent = ureq::Agent::config_builder()
@@ -32,18 +34,22 @@ pub fn read_build(input: &str) -> AnyResult<String> {
         let code = agent
             .get(&url)
             .call()
-            .map_err(|e| format!("{url}: {e}"))?
+            .map_err(|e| Error::Download(format!("{url}: {e}")))?
             .into_body()
-            .read_to_string()?;
-        return Ok(pob::code::decode(&code)?);
+            .read_to_string()
+            .map_err(|e| Error::Download(format!("{url}: {e}")))?;
+        return crate::code::decode(&code);
     }
     if input.starts_with("http://") || input.starts_with("https://") {
-        return Err(format!("unsupported link; supported sites: {}", site_list()).into());
+        return Err(Error::Code(format!(
+            "unsupported link; supported sites: {}",
+            site_list()
+        )));
     }
 
     let path = Path::new(input);
     let text = if path.is_file() {
-        fs::read_to_string(path)?
+        fs::read_to_string(path).map_err(|e| Error::io("read", path, e))?
     } else {
         input.to_owned()
     };
@@ -51,7 +57,7 @@ pub fn read_build(input: &str) -> AnyResult<String> {
     if trimmed.starts_with('<') {
         Ok(trimmed.to_owned())
     } else {
-        Ok(pob::code::decode(trimmed)?)
+        crate::code::decode(trimmed)
     }
 }
 
@@ -100,6 +106,6 @@ mod tests {
     fn accepts_xml_and_codes() {
         let xml = "<PathOfBuilding2><Build/></PathOfBuilding2>";
         assert_eq!(read_build(xml).unwrap(), xml);
-        assert_eq!(read_build(&pob::code::encode(xml)).unwrap(), xml);
+        assert_eq!(read_build(&crate::code::encode(xml)).unwrap(), xml);
     }
 }

@@ -3,6 +3,112 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-19: Versions, releases and self-update
+
+**Decision (from user):** make the repository public so the app can update
+itself without credentials. (Changing visibility is done by the user on
+GitHub.) Checked before: no personal data in the tree; every commit is
+authored with the GitHub no-reply address.
+
+**What changed**
+- Every CI build is stamped `0.1.<run number>` and its commit
+  (`BUILD_DOCTOR_VERSION`, `BUILD_DOCTOR_COMMIT`); local builds say
+  `0.1.0-dev` and never offer updates. The app shows its version.
+- CI `release` job: every green push to `main` publishes release
+  `v0.1.<run>` marked Latest, with `build-doctor.exe`, `doctor.exe` and
+  `version.json` (version, commit, SHA-256 of the exe).
+- `crates/app/src/update.rs`: on start, reads
+  `releases/latest/download/version.json`; if its build number is higher,
+  the app offers "Update and restart", downloads the exe with progress,
+  checks the SHA-256, renames the running exe to `.old`, moves the new one
+  in, restarts; `.old` is removed on the next start. Offline or errors: the
+  check stays silent.
+
+**What was tested**
+- Unit tests: build numbers, side-file names, SHA-256 matches `sha256sum`.
+- Update notice rendered with mocked data. The real update path needs a
+  published release and a public repo; it runs for the first time after
+  this is merged.
+
+## 2026-11-19: Plan keeps the other side from falling (user report)
+
+**Problem (from the user's first real run, Blood Mage):** step 1 of the
+damage plan dropped Mind Over Matter for +17.3% DPS at −57.5% EHP and
+−57.3% smallest max hit. The damage goal accepted any survival loss.
+
+**What changed**
+- `PlanOptions::max_other_loss` (default 0%): over the whole plan, the side
+  not being optimised may not fall below its starting value by more than
+  this (EHP and smallest max hit for the damage goal, damage for the
+  survival goal), with 0.05% rounding slack. Applied to screened pairs
+  before exact trials and to every exact trial.
+- CLI `doctor todo --max-loss <percent|any>`; app: "Survival loss allowed:
+  None · 5% · Any" (reads "Damage loss" for the survival goal).
+
+**What was tested**
+- Unit test for the guard (strict, tolerant, any, survival goal).
+- Shaman fixture, 3 steps with the default: +52.8% DPS with EHP +1.0% and
+  smallest max hit +1.1%. 34/34 exact; all tests pass.
+- Cross-check from the user: poe.ninja's figures for their character (life,
+  mana, spirit, armour, evasion, resistances, EHP, max hits) match the app.
+
+## 2026-11-19: Faster PoB install with progress
+
+**Problem (reported):** the app's first-start install sat for 15+ minutes
+with no progress. It downloaded GitHub's archive of the whole PoB repository
+(~390 MB, mostly art) before using 47 MB of it.
+
+**What changed**
+- `Install::download` fetches only the files the engine uses, from
+  raw.githubusercontent.com, 8 at a time with 3 tries each: 1,005 files,
+  45.5 MB, each SHA-1-checked against PoB's manifest as it arrives. Paths
+  are percent-encoded (PoB has file names with spaces). The `runtime` part
+  is limited to `runtime/lua` (the rest is GUI runtime).
+- Progress callback (`InstallProgress`): the CLI prints files and MB; the app
+  shows a determinate bar with the same.
+- Leftover `.download-*.zip` files from the old installer are deleted.
+- `from_archive` (offline install) shares the same finishing step.
+
+**What was tested**
+- `doctor engine install` from scratch: 5.5 s here, `engine verify` passes,
+  precision gate exact on the new install.
+- The real app's Install button under Xvfb: live progress, finished in a few
+  seconds, removed a planted stale archive, then ready to analyse.
+
+## 2026-11-19: Desktop app
+
+**What changed**
+- `crates/app` (binary `build-doctor`): Tauri 2 desktop app. Native window
+  rendered by WebView2 on Windows; plain HTML/CSS/JS interface (`ui/`, no
+  framework, no Node build) that only presents what the Rust commands return.
+  Commands: `engine_status`, `install_engine`, `load_build`, `realistic`,
+  `plan` (progress events, cancellable), `cancel_plan`. One engine per core
+  (max 8) started on the first build and kept warm.
+- Screens: start (paste a code or link; install PoB if missing), Overview
+  (tiles, exact-reproduction verdict, PoB warnings, stats, assumed
+  conditions, fight simulated, mods not counted), Realistic numbers
+  (tick-to-keep, shared with the plan), Passive tree plan (goal, steps, live
+  progress, steps as Take/Drop chips with deltas, copy final PoB code).
+- `crates/analysis` (new library): overview, realistic and plan logic moved
+  out of the CLI, returning serialisable data with plan progress and
+  cancellation. The CLI and the app share it; the CLI only prints.
+- `pob`: build input (codes, links, files) and the data directory moved in
+  from the CLI; `pob::PINNED_VERSION`; `Pool::install()`; `Summary` and
+  `NodeRef` serialise.
+- CLI: `--json` on check, realistic and todo.
+- CI: Linux jobs install the WebKitGTK libraries; the Windows job uploads
+  `build-doctor.exe` and `doctor.exe` as the `build-doctor-windows` artifact.
+
+**What was tested**
+- Refactor regression: CLI output unchanged on the Shaman fixture (401,771 /
+  87,326 / 135,462; all 105 saved stats reproduced). 31 tests and
+  `doctor verify` (34 exact) pass.
+- The real app under Xvfb, driven by xdotool: pasting the maxroll link
+  fetched the build and showed the Exact verdict; Realistic numbers and a
+  5-step plan ran with live progress and matched the CLI (87,326 → 151,156).
+- Interface reviewed in Chromium at 1360×860 on real `--json` data.
+- Not run here: the Windows build of the app (CI builds it).
+
 ## 2026-11-19: Ranked to-do list, passive tree (`doctor todo`)
 
 **What changed**
@@ -108,8 +214,8 @@ Newest first.
 
 **Decisions (from user):** do not report the Darkness Enthroned bug to PoB2.
 User fixtures later. Watch GGG API registration: scheduled task "GGG API
-registration watch" (Mon and Thu 18:33 Australia/Brisbane, read-only, push
-notification; timezone inferred from the repo's +10:00 timestamps).
+registration watch" (twice a week, read-only, push
+notification).
 
 **Bugs found and fixed**
 - *Wrong numbers instead of an error for an unknown tree* (the 1.0 launch-day

@@ -58,6 +58,7 @@ impl Slot {
 #[derive(Debug)]
 pub struct Pool {
     workers: Vec<(mpsc::Sender<Task>, thread::JoinHandle<()>)>,
+    install: Install,
 }
 
 impl Pool {
@@ -96,7 +97,15 @@ impl Pool {
                 .recv()
                 .map_err(|_| Error::Startup("a PoB worker thread exited".into()))??;
         }
-        Ok(Self { workers })
+        Ok(Self {
+            workers,
+            install: install.clone(),
+        })
+    }
+
+    /// The PoB release the pool's engines run.
+    pub fn install(&self) -> &Install {
+        &self.install
     }
 
     pub fn size(&self) -> usize {

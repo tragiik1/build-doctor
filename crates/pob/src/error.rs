@@ -12,6 +12,9 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    #[error("PoB2 {0} is not installed")]
+    NotInstalled(String),
+
     #[error("not a PoB2 install: {0}")]
     NotAnInstall(String),
 
