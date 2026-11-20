@@ -29,6 +29,9 @@ const state = {
   update: null,          // { release, status: "available" | "installing" | "error", progress, error }
 };
 
+// The app's mark (the icon without its tile): spectacles, one lens lit.
+const MARK = `<svg class="mark" viewBox="0 0 48 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="#151a1f" stroke="#efe6d4" stroke-width="2.6"/><circle cx="36" cy="12" r="8.5" fill="#f0a23c" stroke="#efe6d4" stroke-width="2.6"/><path d="M20.5 10.5 Q24 7.5 27.5 10.5" fill="none" stroke="#efe6d4" stroke-width="2.2" stroke-linecap="round"/></svg>`;
+
 // ---------------------------------------------------------------- helpers
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -367,7 +370,7 @@ function renderStart() {
       : `Path of Building ${esc(e.pinned)} is not installed yet.`;
   return `
     <div class="start"><div class="start-card">
-      <div class="wordmark">Build Doctor</div>
+      <div class="wordmark">${MARK}Build Doctor</div>
       <h1>Load a build</h1>
       <p>Paste a Path of Building code, or a pobb.in, poe.ninja, maxroll or poe2db link. You get a diagnosis first: what to fix, each fix measured by Path of Building.</p>
       <p class="faint where">Where to get one: in Path of Building, Import/Export Build, then Generate and Copy. On poe.ninja, open a character and use its Path of Building export.</p>
@@ -408,7 +411,7 @@ function renderRail() {
   ];
   return `
     <aside class="rail">
-      <div class="wordmark">Build Doctor</div>
+      <div class="wordmark">${MARK}Build Doctor</div>
       <div class="build-id">
         <div class="asc">${esc(b.ascendancy ?? b.class)}</div>
         <div class="meta">${b.ascendancy ? esc(b.class) + " · " : ""}Level ${esc(b.level ?? "–")}</div>

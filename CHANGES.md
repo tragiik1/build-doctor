@@ -3,6 +3,24 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-20: New app icon: spectacles, one lens lit
+
+**Decision (from user):** after several rounds of concepts, refine the
+"spectacles with one glowing lens" mark (it passed the 16 px and
+black-and-white tests best).
+
+**What changed**
+- `crates/app/icons/source/icon.svg` (48 px and up: flat bone-white frames,
+  dark glass left lens, lit right lens holding a round brilliant-cut gem,
+  a soft amber halo on a dark tile) and `icon-small.svg` (16–32 px: thicker
+  frames, plain lit lens, no detail that turns to noise).
+- `icon.ico` holds 16, 24 and 32 px from the small version and 48, 64, 128
+  and 256 px from the full one (checked pixel for pixel); the PNGs are
+  rendered from the same sources.
+- The mark (the icon without its tile) sits beside "Build Doctor" in the
+  menu and on the start page, drawn inline so it stays sharp at any display
+  scaling.
+
 ## 2026-11-20: Cleaner chrome; item-granted skills on imported characters
 
 **From the user (screenshots of 0.1.27):** The Stars Answer still listed;
