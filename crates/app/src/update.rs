@@ -3,8 +3,10 @@
 //! CI stamps each Windows build with `BUILD_DOCTOR_VERSION` (`0.1.<build>`)
 //! and `BUILD_DOCTOR_COMMIT`, and publishes the newest `main` build as the
 //! repository's latest release, next to a `version.json` naming its version
-//! and the SHA-256 of the executable. Updating downloads that executable,
-//! checks the hash, swaps it in beside the running one and restarts.
+//! and the SHA-256 of each executable. Updating downloads the app (and the
+//! command-line `doctor.exe` when it sits next to the app, as in the
+//! "Build Doctor" folder), checks every hash before changing anything, swaps
+//! them in and restarts.
 
 use std::fs;
 use std::io::Read;
@@ -15,7 +17,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const RELEASE: &str = "https://github.com/tragiik1/build-doctor/releases/latest/download/";
-const EXE_ASSET: &str = "build-doctor.exe";
+const APP_ASSET: &str = "build-doctor.exe";
+const CLI_ASSET: &str = "doctor.exe";
 
 /// This build's version: `0.1.<build>` for CI builds, `<crate version>-dev`
 /// for local ones.
@@ -42,7 +45,11 @@ fn build_number(version: &str) -> Option<u64> {
 pub struct Release {
     pub version: String,
     pub commit: String,
+    /// The app's SHA-256.
     pub sha256: String,
+    /// `doctor.exe`'s SHA-256 (releases since the folder layout).
+    #[serde(default)]
+    pub doctor_sha256: Option<String>,
 }
 
 fn agent(timeout: Duration) -> ureq::Agent {
@@ -74,14 +81,46 @@ pub fn check() -> Result<Option<Release>, String> {
         .map(|_| release))
 }
 
-/// Downloads the release's executable, checks its SHA-256, and puts it in
-/// place of the running one (which is kept as `.old` until the next start).
-/// `progress` gets (bytes so far, total bytes if known).
+/// Downloads the release's executables, checks each SHA-256, and puts them
+/// in place of the running ones (kept as `.old` until the next start).
+/// Nothing changes unless every download matches. `progress` gets (bytes
+/// so far, total bytes if known) for each download.
 pub fn install(release: &Release, progress: &dyn Fn(u64, Option<u64>)) -> Result<(), String> {
-    let exe =
+    let app =
         std::env::current_exe().map_err(|e| format!("Cannot find the running program: {e}"))?;
+    let mut wanted = vec![(app.clone(), APP_ASSET, release.sha256.as_str())];
+    let cli = app.with_file_name(CLI_ASSET);
+    if let (true, Some(sha)) = (cli.is_file(), release.doctor_sha256.as_deref()) {
+        wanted.push((cli, CLI_ASSET, sha));
+    }
+    let mut ready = Vec::new();
+    for (path, asset, sha) in wanted {
+        let bytes = download(asset, sha, progress)?;
+        let new = with_suffix(&path, "new");
+        fs::write(&new, &bytes).map_err(|e| format!("Cannot write {}: {e}", new.display()))?;
+        ready.push(path);
+    }
+    let mut swapped: Vec<&PathBuf> = Vec::new();
+    for path in &ready {
+        if let Err(err) = swap(path) {
+            for done in swapped {
+                restore(done);
+            }
+            return Err(err);
+        }
+        swapped.push(path);
+    }
+    Ok(())
+}
+
+/// Downloads a release asset and checks it against `sha256`.
+fn download(
+    asset: &str,
+    sha256: &str,
+    progress: &dyn Fn(u64, Option<u64>),
+) -> Result<Vec<u8>, String> {
     let response = agent(Duration::from_secs(15 * 60))
-        .get(&format!("{RELEASE}{EXE_ASSET}"))
+        .get(&format!("{RELEASE}{asset}"))
         .call()
         .map_err(|e| format!("Download failed: {e}"))?;
     let total = response.body().content_length();
@@ -98,33 +137,44 @@ pub fn install(release: &Release, progress: &dyn Fn(u64, Option<u64>)) -> Result
         bytes.extend_from_slice(&chunk[..n]);
         progress(bytes.len() as u64, total);
     }
-
     let actual = hex(&Sha256::digest(&bytes));
-    if !actual.eq_ignore_ascii_case(&release.sha256) {
+    if !actual.eq_ignore_ascii_case(sha256) {
         return Err(format!(
-            "The download does not match the release (SHA-256 {actual}, expected {}). Nothing was changed.",
-            release.sha256
+            "The download of {asset} does not match the release (SHA-256 {actual}, expected {sha256}). Nothing was changed."
         ));
     }
+    Ok(bytes)
+}
 
-    let new = with_suffix(&exe, "new");
-    let old = with_suffix(&exe, "old");
-    fs::write(&new, &bytes).map_err(|e| format!("Cannot write {}: {e}", new.display()))?;
+/// Puts `path.new` in place of `path`, keeping `path.old`. Windows lets a
+/// running program be renamed, not replaced.
+fn swap(path: &Path) -> Result<(), String> {
+    let (new, old) = (with_suffix(path, "new"), with_suffix(path, "old"));
     let _ = fs::remove_file(&old);
-    // Windows lets a running program be renamed, not replaced.
-    fs::rename(&exe, &old).map_err(|e| format!("Cannot move the running program aside: {e}"))?;
-    if let Err(e) = fs::rename(&new, &exe) {
-        let _ = fs::rename(&old, &exe);
-        return Err(format!("Cannot put the new version in place: {e}"));
+    fs::rename(path, &old).map_err(|e| format!("Cannot move {} aside: {e}", path.display()))?;
+    if let Err(e) = fs::rename(&new, path) {
+        let _ = fs::rename(&old, path);
+        return Err(format!(
+            "Cannot put the new {} in place: {e}",
+            path.display()
+        ));
     }
     Ok(())
 }
 
-/// Removes the previous executable an update left behind.
+/// Undoes a [`swap`].
+fn restore(path: &Path) {
+    let _ = fs::remove_file(path);
+    let _ = fs::rename(with_suffix(path, "old"), path);
+}
+
+/// Removes the previous executables an update left behind.
 pub fn clean_up() {
-    if let Ok(exe) = std::env::current_exe() {
-        let _ = fs::remove_file(with_suffix(&exe, "old"));
-        let _ = fs::remove_file(with_suffix(&exe, "new"));
+    if let Ok(app) = std::env::current_exe() {
+        for path in [app.clone(), app.with_file_name(CLI_ASSET)] {
+            let _ = fs::remove_file(with_suffix(&path, "old"));
+            let _ = fs::remove_file(with_suffix(&path, "new"));
+        }
     }
 }
 
@@ -154,6 +204,33 @@ mod tests {
             with_suffix(Path::new("C:/x/build-doctor.exe"), "old"),
             Path::new("C:/x/build-doctor.exe.old")
         );
+    }
+
+    #[test]
+    fn reads_old_and_new_version_files() {
+        let old: Release =
+            serde_json::from_str(r#"{"version":"0.1.30","commit":"abc","sha256":"00"}"#).unwrap();
+        assert_eq!(old.doctor_sha256, None);
+        let new: Release = serde_json::from_str(
+            r#"{"version":"0.1.40","commit":"abc","sha256":"00","doctorSha256":"11"}"#,
+        )
+        .unwrap();
+        assert_eq!(new.doctor_sha256.as_deref(), Some("11"));
+    }
+
+    #[test]
+    fn swaps_and_restores() {
+        let dir = std::env::temp_dir().join(format!("bd-swap-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("doctor.exe");
+        fs::write(&exe, "old").unwrap();
+        fs::write(with_suffix(&exe, "new"), "new").unwrap();
+        swap(&exe).unwrap();
+        assert_eq!(fs::read_to_string(&exe).unwrap(), "new");
+        assert_eq!(fs::read_to_string(with_suffix(&exe, "old")).unwrap(), "old");
+        restore(&exe);
+        assert_eq!(fs::read_to_string(&exe).unwrap(), "old");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

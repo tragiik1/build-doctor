@@ -462,6 +462,11 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // Run from the "Build Doctor" folder for the first time: bring Path of
+    // Building over from where the single-file app kept it.
+    if data.is_portable() {
+        data.adopt_platform_installs();
+    }
     tauri::Builder::default()
         .manage(AppState {
             data,

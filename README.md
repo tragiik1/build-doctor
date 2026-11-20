@@ -9,13 +9,21 @@ ships, and is checked against builds saved by the PoB2 app.
 
 ## Desktop app
 
-Download `build-doctor.exe` from
-[the latest release](https://github.com/tragiik1/build-doctor/releases/latest)
-and run it. It updates itself: when a newer release exists it offers
-"Update and restart", checks the download's SHA-256 against the release and
-swaps itself in place. Windows 11 already has the WebView2 runtime it uses. On first
-start it offers to install Path of Building (one download, ~390 MB, every
-file verified). Then paste a PoB code or link:
+Download `Build-Doctor.zip` from
+[the latest release](https://github.com/tragiik1/build-doctor/releases/latest),
+extract it anywhere you can write to (not Program Files), and run
+`build-doctor.exe` in the `Build Doctor` folder. Everything stays in that
+folder: the app, the command-line `doctor.exe`, and Path of Building in
+`data` (installed on first start: one download, ~390 MB, every file
+verified). Moving or deleting the folder moves or removes all of it. The
+single `build-doctor.exe` from the release still works too; it keeps its
+data in `%LOCALAPPDATA%\build-doctor`, and the first start from the folder
+moves an install from there into `data`.
+
+It updates itself: when a newer release exists it offers "Update and
+restart", checks each download's SHA-256 against the release and swaps the
+app (and `doctor.exe` next to it) in place. Windows 11 already has the
+WebView2 runtime it uses. Then paste a PoB code or link:
 
 - **Your build** (the first page): the coach. What your numbers mean and
   what to do, in order: each step says why (the mechanic, with your
@@ -86,8 +94,9 @@ doctor verify --sweep                 # which PoB releases reproduce which fixtu
 ```
 
 Links from pobb.in, poe.ninja (`/poe2/pob/`), maxroll (`/poe2/pob/`) and
-poe2db (`/pob/`) are accepted. PoB installs live in `%LOCALAPPDATA%\build-doctor`
-on Windows (override with `--data-dir` or `DOCTOR_DATA_DIR`).
+poe2db (`/pob/`) are accepted. PoB installs live in the `data` folder next to
+the program when there is one, otherwise in `%LOCALAPPDATA%\build-doctor` on
+Windows (override with `--data-dir` or `DOCTOR_DATA_DIR`).
 
 ## Precision
 

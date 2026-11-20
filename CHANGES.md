@@ -3,6 +3,33 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-20: The "Build Doctor" folder
+
+**Asked:** why one exe rather than a folder, with a preference for a folder
+if it helps. It does: the single exe kept Path of Building (~390 MB) out of
+sight in `%LOCALAPPDATA%`, and `doctor.exe` was a separate download.
+
+- The release now has `Build-Doctor.zip`: a `Build Doctor` folder with
+  `build-doctor.exe`, `doctor.exe` and `data/` (with a short README, so
+  every unzip tool keeps the folder). A `data` folder next to the program
+  makes both programs keep their data there; without one they use the
+  platform directory as before, so existing single-exe installs keep working.
+- First start from the folder moves an existing install from
+  `%LOCALAPPDATA%\build-doctor` into `data` (a rename: no download, no
+  copy; skipped if it would cross drives, in which case the app offers to
+  install).
+- The updater now also updates `doctor.exe` when it sits next to the app:
+  `version.json` carries `doctorSha256`, every download is checked before
+  anything is replaced, and a failed swap restores what was already
+  swapped. Older `version.json` files (no `doctorSha256`) still read.
+- The coach's API key is not in the folder (Windows Credential Manager), so
+  sharing or moving the folder never shares the key.
+
+**Tests:** the install move (once, never over existing installs, never onto
+itself), old and new `version.json`, swap and restore; end to end with
+`doctor engine list` run from a folder with `data/` and a separate old
+install, which moved in and was used.
+
 ## 2026-11-20: Ask the coach (an AI coach that does not guess)
 
 **Goal (from user):** "a genuinely good AI coach that doesn't hallucinate

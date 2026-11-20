@@ -21,7 +21,8 @@ use pob::PINNED_VERSION as PINNED_POB;
 #[derive(Debug, Parser)]
 #[command(name = "doctor", version, about = "Path of Exile 2 build doctor")]
 struct Cli {
-    /// Where PoB installs and caches live. Defaults to the platform data
+    /// Where PoB installs and caches live. Defaults to the `data` folder
+    /// next to the program when there is one, else the platform data
     /// directory (%LOCALAPPDATA%\build-doctor on Windows).
     #[arg(long, global = true, env = "DOCTOR_DATA_DIR")]
     data_dir: Option<PathBuf>,
@@ -302,6 +303,9 @@ type AnyResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 fn run(cli: Cli) -> AnyResult<ExitCode> {
     let data = pob::DataDir::new(cli.data_dir)?;
+    if data.is_portable() {
+        data.adopt_platform_installs();
+    }
     match cli.command {
         Command::Engine(EngineCommand::Install { version, archive }) => {
             let install = match archive {
