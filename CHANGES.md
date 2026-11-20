@@ -3,6 +3,13 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-20: Icon redrawn to the user's preferred version
+
+The user preferred a bolder generated variant: thick cream frames, straight
+arms, a plain glowing amber lens inset with a dark gap, no gem. Redrawn as
+clean vectors to its proportions (the generated image had soft, uneven
+edges), with the small 16–32 px version and the in-app mark to match.
+
 ## 2026-11-20: New app icon: spectacles, one lens lit
 
 **Decision (from user):** after several rounds of concepts, refine the

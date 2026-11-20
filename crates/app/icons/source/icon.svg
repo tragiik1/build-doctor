@@ -1,36 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
  <defs>
-  <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#171a1f"/><stop offset="1" stop-color="#0a0b0d"/></linearGradient>
-  <radialGradient id="halo" cx="358" cy="262" r="200" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ffae45" stop-opacity="0.34"/><stop offset="0.5" stop-color="#e8782a" stop-opacity="0.10"/><stop offset="1" stop-color="#e8782a" stop-opacity="0"/></radialGradient>
-  <radialGradient id="lit" cx="0.45" cy="0.4" r="0.65"><stop offset="0" stop-color="#ffd27a"/><stop offset="0.7" stop-color="#f0962e"/><stop offset="1" stop-color="#c25a1a"/></radialGradient>
+  <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d1411"/><stop offset="1" stop-color="#060908"/></linearGradient>
+  <radialGradient id="halo" cx="352" cy="256" r="150" gradientUnits="userSpaceOnUse"><stop offset="0.45" stop-color="#ffa21a" stop-opacity="0.42"/><stop offset="0.7" stop-color="#e07a10" stop-opacity="0.18"/><stop offset="1" stop-color="#e07a10" stop-opacity="0"/></radialGradient>
+  <radialGradient id="lens" cx="0.5" cy="0.45" r="0.6"><stop offset="0" stop-color="#ffd21a"/><stop offset="0.6" stop-color="#ffb30f"/><stop offset="1" stop-color="#f08c10"/></radialGradient>
   <clipPath id="tileClip"><rect x="16" y="16" width="480" height="480" rx="108"/></clipPath>
-  <clipPath id="leftLens"><circle cx="154" cy="262" r="84"/></clipPath>
  </defs>
  <rect x="16" y="16" width="480" height="480" rx="108" fill="url(#tile)"/>
- <g clip-path="url(#tileClip)"><rect x="0" y="0" width="512" height="512" fill="url(#halo)"/></g>
- <rect x="17.5" y="17.5" width="477" height="477" rx="106.5" fill="none" stroke="#ffffff" stroke-opacity="0.07" stroke-width="3"/>
-
- <!-- left lens: dark glass, one clean reflection -->
- <circle cx="154" cy="262" r="84" fill="#151a1f"/>
- <g clip-path="url(#leftLens)"><path d="M96 230 L176 168 L198 186 L118 248 Z" fill="#ffffff" opacity="0.06"/></g>
-
- <!-- right lens: lit, a round brilliant-cut gem seen from above -->
- <circle cx="358" cy="262" r="84" fill="url(#lit)"/>
- <g transform="translate(358 262)">
-  <polygon points="0,-52 37,-37 52,0 37,37 0,52 -37,37 -52,0 -37,-37" fill="#ffd98e"/>
-  <polygon points="0,-52 37,-37 0,-24 -37,-37" fill="#fff4d6"/>
-  <polygon points="37,-37 52,0 24,0 0,-24" fill="#ffe2a2"/>
-  <polygon points="-37,-37 0,-24 -24,0 -52,0" fill="#ffefc4"/>
-  <polygon points="52,0 37,37 0,24 24,0" fill="#f2a347"/>
-  <polygon points="-52,0 -24,0 0,24 -37,37" fill="#f7b75c"/>
-  <polygon points="37,37 0,52 -37,37 0,24" fill="#e0862f"/>
-  <polygon points="0,-24 24,0 0,24 -24,0" fill="#fffaf0"/>
-  <polygon points="0,-52 37,-37 52,0 37,37 0,52 -37,37 -52,0 -37,-37" fill="none" stroke="#9a4a16" stroke-opacity="0.45" stroke-width="3" stroke-linejoin="round"/>
- </g>
-
- <!-- frames and bridge: flat bone white -->
- <circle cx="154" cy="262" r="84" fill="none" stroke="#efe6d4" stroke-width="20"/>
- <circle cx="358" cy="262" r="84" fill="none" stroke="#efe6d4" stroke-width="20"/>
- <path d="M236 244 Q256 222 276 244" fill="none" stroke="#efe6d4" stroke-width="16" stroke-linecap="round"/>
- <path d="M70 246 L52 240 M442 246 L460 240" stroke="#efe6d4" stroke-width="16" stroke-linecap="round"/>
+ <g clip-path="url(#tileClip)"><circle cx="352" cy="256" r="150" fill="url(#halo)"/></g>
+ <!-- arms -->
+ <rect x="49" y="240" width="40" height="32" rx="6" fill="#f6ead0"/>
+ <rect x="423" y="240" width="40" height="32" rx="6" fill="#f6ead0"/>
+ <!-- lit lens, inset in the frame with a dark gap -->
+ <circle cx="352" cy="256" r="60" fill="#160f06"/>
+ <circle cx="352" cy="256" r="50" fill="url(#lens)"/>
+ <!-- frames and bridge -->
+ <circle cx="160" cy="256" r="71" fill="none" stroke="#f6ead0" stroke-width="21"/>
+ <circle cx="352" cy="256" r="71" fill="none" stroke="#f6ead0" stroke-width="21"/>
+ <path d="M226 236 Q256 216 286 236" fill="none" stroke="#f6ead0" stroke-width="18"/>
 </svg>

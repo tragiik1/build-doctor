@@ -30,7 +30,7 @@ const state = {
 };
 
 // The app's mark (the icon without its tile): spectacles, one lens lit.
-const MARK = `<svg class="mark" viewBox="0 0 48 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="#151a1f" stroke="#efe6d4" stroke-width="2.6"/><circle cx="36" cy="12" r="8.5" fill="#f0a23c" stroke="#efe6d4" stroke-width="2.6"/><path d="M20.5 10.5 Q24 7.5 27.5 10.5" fill="none" stroke="#efe6d4" stroke-width="2.2" stroke-linecap="round"/></svg>`;
+const MARK = `<svg class="mark" viewBox="0 0 64 24" aria-hidden="true"><rect x="0.5" y="10" width="7" height="4.5" rx="1" fill="#f6ead0"/><rect x="56.5" y="10" width="7" height="4.5" rx="1" fill="#f6ead0"/><circle cx="44" cy="12.25" r="5.6" fill="#ffb30f"/><circle cx="20" cy="12.25" r="8.4" fill="none" stroke="#f6ead0" stroke-width="3"/><circle cx="44" cy="12.25" r="8.4" fill="none" stroke="#f6ead0" stroke-width="3"/><path d="M28 9.6 Q32 7 36 9.6" fill="none" stroke="#f6ead0" stroke-width="2.6"/></svg>`;
 
 // ---------------------------------------------------------------- helpers
 
