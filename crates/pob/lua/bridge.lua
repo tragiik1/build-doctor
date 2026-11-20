@@ -989,6 +989,221 @@ function bd_level_lines()
 	return out
 end
 
+---------------------------------------------------------------------------
+-- Lookups for the assistant: the loaded build and PoB's game data as JSON
+---------------------------------------------------------------------------
+
+local json = require("dkjson")
+
+-- An empty Lua table encodes as an empty JSON array.
+local function list(t)
+	return setmetatable(t, { __jsontype = "array" })
+end
+
+local function itemLines(item)
+	local out = list({ })
+	local groups = {
+		{ "enchant", item.enchantModLines }, { "rune", item.runeModLines },
+		{ "implicit", item.implicitModLines }, { "explicit", item.explicitModLines },
+	}
+	for _, group in ipairs(groups) do
+		for _, modLine in ipairs(group[2] or { }) do
+			if item:CheckModLineVariant(modLine) then
+				out[#out + 1] = {
+					kind = group[1],
+					line = StripEscapes(modLine.line),
+					crafted = modLine.crafted or nil,
+					fractured = modLine.fractured or nil,
+					unread = modLine.extra and true or nil,
+				}
+			end
+		end
+	end
+	return out
+end
+
+-- What the build wears, socketed and allocated, as PoB holds it: items by
+-- slot with their mod lines, skill groups with their gems, and the
+-- keystones, notables and ascendancy passives with PoB's text for each.
+function bd_build_details()
+	ensureOriginal()
+	local itemsTab = build.itemsTab
+	local items = list({ })
+	for _, slot in ipairs(itemsTab.orderedSlots) do
+		local item = slot.selItemId and itemsTab.items[slot.selItemId]
+		local shown = slot.nodeId and build.spec.allocNodes[slot.nodeId] or (not slot.nodeId and slot:IsShown())
+		if item and shown and not slot.slotName:find("Swap") then
+			items[#items + 1] = {
+				slot = slot.slotName,
+				name = item.name,
+				base = item.baseName,
+				rarity = item.rarity,
+				quality = item.quality,
+				corrupted = item.corrupted or nil,
+				lines = itemLines(item),
+			}
+		end
+	end
+	local skills = list({ })
+	for index, group in ipairs(build.skillsTab.socketGroupList) do
+		local gems = list({ })
+		for _, gem in ipairs(group.gemList or { }) do
+			local effect = gem.grantedEffect or (gem.gemData and gem.gemData.grantedEffect)
+			gems[#gems + 1] = {
+				name = effect and effect.name or gem.nameSpec,
+				level = gem.level,
+				quality = gem.quality,
+				enabled = gem.enabled ~= false,
+				support = effect and effect.support or false,
+			}
+		end
+		skills[#skills + 1] = {
+			label = group.label ~= "" and group.label or nil,
+			slot = group.slot,
+			enabled = group.enabled ~= false,
+			main = index == build.mainSocketGroup,
+			inFullDps = group.includeInFullDPS == true,
+			grantedBy = group.source,
+			gems = gems,
+		}
+	end
+	local passives = { keystones = list({ }), notables = list({ }), ascendancy = list({ }) }
+	for _, node in pairs(build.spec.allocNodes) do
+		local kind = node.ascendancyName and (node.isNotable and "ascendancy")
+			or node.type == "Keystone" and "keystones"
+			or node.type == "Notable" and "notables"
+		if kind and node.dn then
+			passives[kind][#passives[kind] + 1] = { name = node.dn, stats = list(node.sd and { unpack(node.sd) } or { }) }
+		end
+	end
+	for _, group in pairs(passives) do
+		table.sort(group, function(a, b) return a.name < b.name end)
+	end
+	return json.encode({ items = items, skills = skills, passives = passives })
+end
+
+-- Numbers in PoB's output for the loaded build whose key contains `filter`
+-- (any case), sorted by key, at most `limit`.
+function bd_output_keys(filter, limit)
+	ensureOriginal()
+	local needle = filter:lower()
+	local keys = { }
+	for key, value in pairs(build.calcsTab.mainOutput or { }) do
+		if type(key) == "string" and type(value) == "number" and key:lower():find(needle, 1, true) then
+			keys[#keys + 1] = key
+		end
+	end
+	table.sort(keys)
+	local out = list({ })
+	for i = 1, math.min(#keys, limit) do
+		out[i] = { key = keys[i], value = build.calcsTab.mainOutput[keys[i]] }
+	end
+	return json.encode({ total = #keys, stats = out })
+end
+
+local function uniqueName(raw)
+	return raw:match("^%s*([^\r\n]+)")
+end
+
+-- Unique items in PoB's data whose name matches `query`: the item's text as
+-- PoB stores it (roll ranges, variants), for an exact name; otherwise the
+-- names that contain it, with the text of the first few.
+function bd_find_unique(query)
+	local needle = query:lower():gsub("^%s+", ""):gsub("%s+$", "")
+	local exact, partial = nil, { }
+	for _, typeList in pairs(data.uniques) do
+		for _, raw in pairs(typeList) do
+			local name = type(raw) == "string" and uniqueName(raw)
+			if name then
+				local lower = name:lower()
+				if lower == needle then
+					exact = raw
+				elseif lower:find(needle, 1, true) then
+					partial[#partial + 1] = raw
+				end
+			end
+		end
+	end
+	local found = list({ })
+	if exact then
+		found[1] = { name = uniqueName(exact), text = exact:gsub("^%s+", ""):gsub("%s+$", "") }
+	else
+		table.sort(partial, function(a, b) return uniqueName(a) < uniqueName(b) end)
+		for i, raw in ipairs(partial) do
+			found[i] = { name = uniqueName(raw), text = i <= 3 and raw:gsub("^%s+", ""):gsub("%s+$", "") or nil }
+			if i == 12 then break end
+		end
+	end
+	return json.encode({ query = query, exact = exact ~= nil, items = found })
+end
+
+-- Fields of a skill level worth showing (cost, cooldown, reservation, …).
+local function levelFields(level)
+	local out = { }
+	for key, value in pairs(level or { }) do
+		if type(key) == "string" and (type(value) == "number" or type(value) == "table") and key ~= "statInterpolation" then
+			out[key] = value
+		end
+	end
+	return out
+end
+
+-- A gem from PoB's data by name (any case): its description, tags,
+-- requirements, and what it does at `level` in the game's own wording, from
+-- PoB's stat descriptions. Close names are listed when none matches exactly.
+function bd_gem_info(query, level)
+	local needle = query:lower():gsub("^%s+", ""):gsub("%s+$", "")
+	local gem, close = nil, list({ })
+	for _, entry in pairs(data.gems) do
+		local name = entry.name and entry.name:lower()
+		if name == needle then
+			gem = entry
+		elseif name and name:find(needle, 1, true) and #close < 12 then
+			close[#close + 1] = entry.name
+		end
+	end
+	if not gem then
+		table.sort(close)
+		return json.encode({ query = query, found = false, close = close })
+	end
+	local effect = data.skills[gem.grantedEffectId]
+	if not effect then
+		return json.encode({ query = query, found = false, close = close })
+	end
+	level = math.max(1, math.min(level or gem.naturalMaxLevel or 20, 40))
+	local sets = list({ })
+	for _, statSet in ipairs(effect.statSets or { }) do
+		local stats = calcLib.buildSkillInstanceStats({ level = level, quality = 0 }, effect, statSet, false)
+		local lines = data.describeStats(stats, statSet.statDescriptionScope)
+		sets[#sets + 1] = { label = statSet.label, lines = list(lines or { }) }
+	end
+	local quality = list({ })
+	for _, stat in ipairs(effect.qualityStats or { }) do
+		local statSet = effect.statSets and effect.statSets[((stat[3] or { })[1] or 0) + 1] or (effect.statSets or { })[1]
+		if statSet then
+			for _, line in ipairs(data.describeStats({ [stat[1]] = 20 * stat[2] }, statSet.statDescriptionScope, true) or { }) do
+				quality[#quality + 1] = line
+			end
+		end
+	end
+	return json.encode({
+		query = query,
+		found = true,
+		name = gem.name,
+		support = effect.support or false,
+		gemType = gem.gemType,
+		tags = gem.tagString,
+		requirements = { str = gem.reqStr, dex = gem.reqDex, int = gem.reqInt },
+		maxLevel = gem.naturalMaxLevel,
+		description = effect.description,
+		castTime = effect.castTime,
+		level = level,
+		levelData = levelFields(effect.levels and effect.levels[level]),
+		statSets = sets,
+		qualityAt20 = quality,
+	})
+end
+
 function bd_take_log()
 	local out = log
 	log = { }

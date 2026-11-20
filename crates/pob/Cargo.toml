@@ -13,6 +13,7 @@ flate2.workspace = true
 mlua.workspace = true
 roxmltree.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 sha1_smol.workspace = true
 thiserror.workspace = true
 ureq.workspace = true

@@ -8,7 +8,7 @@ const state = {
   engine: null,          // { installed, pinned }
   busy: null,            // { title, detail, progress: 0..1 | null }
   error: null,
-  view: "brief",         // brief | diagnosis | gear | item | plan | realistic | stats
+  view: "brief",         // brief | ask | diagnosis | gear | item | plan | realistic | stats
   brief: null,           // { status: "running" | "done" | "error", result, error }
   overview: null,
   diagnosis: null,       // { status: "running" | "done" | "error", result, error }
@@ -28,6 +28,14 @@ const state = {
   copied: false,
   app: null,             // { version, commit }
   update: null,          // { release, status: "available" | "installing" | "error", progress, error }
+  ask: {
+    status: null,        // { key: "saved" | "environment" | null, models: [{ id, name, note }] }
+    model: loadModel(),
+    draft: "",
+    keyDraft: "",
+    thread: [],          // [{ question, answer, error, live: { text, steps } | null }]
+    working: false,
+  },
 };
 
 // The app's mark (the icon without its tile): spectacles, one lens lit.
@@ -94,6 +102,14 @@ function saveTrade() {
 }
 
 // ---------------------------------------------------------------- actions
+
+function loadModel() {
+  try { return localStorage.getItem("coach-model") || "claude-opus-5-5"; } catch { return "claude-opus-5-5"; }
+}
+
+function saveModel() {
+  try { localStorage.setItem("coach-model", state.ask.model); } catch { /* the choice lasts this session */ }
+}
 
 // Whether the work in progress was started on the page being shown.
 const busyHere = () => state.busy && state.busy.view === state.view;
@@ -178,6 +194,7 @@ async function loadBuild(input) {
   const overview = await run("Calculating your build", "Starting Path of Building and loading the build.", () => invoke("load_build", { input }));
   if (!overview) return;
   state.overview = overview;
+  state.ask.thread = [];
   runDiagnosis();
   state.kept = new Set();
   state.realistic = null;
@@ -235,6 +252,85 @@ async function refreshBrief(current) {
     if (current()) state.brief = { status: "error", error: String(err) };
   }
   if (current()) render();
+}
+
+// ---------------------------------------------------------------- the AI coach
+
+async function refreshAsk() {
+  const status = await invoke("ask_status");
+  state.ask.status = status;
+  if (!status.models.some((m) => m.id === state.ask.model)) state.ask.model = status.models[0].id;
+  render();
+}
+
+async function saveKey() {
+  const key = document.getElementById("api-key")?.value.trim() ?? "";
+  if (!key) return;
+  try {
+    await invoke("save_api_key", { key });
+    state.ask.keyDraft = "";
+    state.error = null;
+  } catch (err) {
+    state.error = String(err);
+  }
+  await refreshAsk();
+}
+
+async function removeKey() {
+  try {
+    await invoke("remove_api_key");
+  } catch (err) {
+    state.error = String(err);
+  }
+  await refreshAsk();
+}
+
+async function askQuestion(question) {
+  const ask = state.ask;
+  question = question.trim();
+  if (!question || ask.working) return;
+  const seq = state.loadSeq;
+  const entry = { question, answer: null, error: null, live: { text: "", steps: [] } };
+  ask.thread.push(entry);
+  ask.draft = "";
+  ask.working = true;
+  render();
+  scrollToEnd();
+  try {
+    const answer = await invoke("ask", { question, model: ask.model });
+    if (seq === state.loadSeq) entry.answer = answer;
+  } catch (err) {
+    if (seq === state.loadSeq) entry.error = String(err);
+  } finally {
+    entry.live = null;
+    ask.working = false;
+    render();
+    if (state.view === "ask") document.getElementById("ask-input")?.focus();
+  }
+}
+
+async function newConversation() {
+  state.ask.thread = [];
+  state.ask.working = false;
+  render();
+  await invoke("new_conversation").catch(() => {});
+}
+
+function scrollToEnd() {
+  const main = document.querySelector(".main");
+  if (main) main.scrollTop = main.scrollHeight;
+}
+
+// Streamed text and steps go straight into the answer being written, so the
+// question box keeps its focus and cursor.
+function showLive() {
+  const entry = state.ask.thread[state.ask.thread.length - 1];
+  const box = document.getElementById("ask-live");
+  if (!entry?.live || !box || state.view !== "ask") return;
+  const main = document.querySelector(".main");
+  const atEnd = main && main.scrollHeight - main.scrollTop - main.clientHeight < 80;
+  box.innerHTML = renderLive(entry.live);
+  if (atEnd) scrollToEnd();
 }
 
 // Reads the worn items (instant) the first time the page opens. Not a
@@ -344,6 +440,9 @@ async function runPlan() {
 
 function resetBuild() {
   state.loadSeq++;
+  state.ask.thread = [];
+  state.ask.working = false;
+  invoke("new_conversation").catch(() => {});
   state.overview = null;
   state.diagnosis = null;
   state.brief = null;
@@ -371,6 +470,15 @@ listen("plan-progress", (event) => {
   }
 });
 
+listen("ask-progress", (event) => {
+  const entry = state.ask.thread[state.ask.thread.length - 1];
+  if (!entry?.live) return;
+  const p = event.payload;
+  if (p.kind === "text") entry.live.text += p.text;
+  else entry.live.steps.push(p.text);
+  showLive();
+});
+
 function phaseShare(phase) {
   if (phase.startsWith("Screening every")) return 0.1;
   if (phase.startsWith("Screening the best")) return 0.6;
@@ -390,9 +498,19 @@ function render() {
     return;
   }
   const scroll = root.querySelector(".main")?.scrollTop ?? 0;
+  // A redraw keeps the cursor where the player is typing.
+  const focused = document.activeElement;
+  const typing = focused && focused.id && (focused.tagName === "TEXTAREA" || focused.tagName === "INPUT")
+    ? { id: focused.id, start: focused.selectionStart, end: focused.selectionEnd }
+    : null;
   root.innerHTML = `<div class="shell">${renderRail()}<main class="main"><div class="page">${renderView()}</div></main></div>`;
   const main = root.querySelector(".main");
   if (main) main.scrollTop = scroll;
+  const field = typing && document.getElementById(typing.id);
+  if (field && !field.disabled) {
+    field.focus();
+    try { field.setSelectionRange(typing.start, typing.end); } catch { /* not a text field */ }
+  }
 }
 
 function renderStart() {
@@ -438,6 +556,7 @@ function renderRail() {
   const findings = state.diagnosis?.status === "done" ? state.diagnosis.result.findings.filter((f) => f.severity !== "note").length : null;
   const nav = [
     ["brief", "Your build", "What to do, and why", ""],
+    ["ask", "Ask the coach", "Any question, checked in PoB", state.ask.working ? "…" : ""],
     ["diagnosis", "Diagnosis", "Every finding, measured", findings ? `${findings}` : ""],
     ["gear", "Gear upgrades", "What to buy next", ""],
     ["item", "Check an item", "Is it an upgrade?", ""],
@@ -465,7 +584,7 @@ function renderRail() {
     </aside>`;
 }
 
-const PAGES = { brief: "Your build", diagnosis: "Diagnosis", gear: "Gear upgrades", item: "Check an item", plan: "Passive tree plan", realistic: "Realistic numbers", stats: "Stats" };
+const PAGES = { brief: "Your build", ask: "Ask the coach", diagnosis: "Diagnosis", gear: "Gear upgrades", item: "Check an item", plan: "Passive tree plan", realistic: "Realistic numbers", stats: "Stats" };
 
 function renderView() {
   const here = !state.busy || state.busy.view === state.view;
@@ -480,6 +599,7 @@ function renderView() {
   if (state.view === "gear") return elsewhere + renderGear() + error;
   if (state.view === "stats") return elsewhere + renderStats() + error;
   if (state.view === "brief") return elsewhere + renderBrief() + error;
+  if (state.view === "ask") return elsewhere + renderAsk() + error;
   return elsewhere + renderDiagnosisPage() + error;
 }
 
@@ -543,6 +663,168 @@ function renderBrief() {
     <div class="grid cols-2">${points("Damage", r.damage)}${points("Defence", r.defence)}</div>`;
   const terms = `<details class="terms"><summary>What the terms mean</summary><dl>${TERMS.map(([t, d]) => `<dt>${t}</dt><dd>${esc(d)}</dd>`).join("")}</dl></details>`;
   return head + verdict + steps + how + terms;
+}
+
+// The AI coach: questions about the build, answered by Claude working
+// through Path of Building, every number checked.
+const SUGGESTIONS = [
+  "What should I improve first, and why?",
+  "What is most likely to kill me, and how do I fix it?",
+  "Which gear slot is my weakest, and what should I look for?",
+  "Explain how my damage works, and what scales it best.",
+];
+
+function renderAsk() {
+  const ask = state.ask;
+  const st = ask.status;
+  const head = `
+    <div class="page-head"><div>
+      <h1>Ask the coach</h1>
+      <p>Ask anything about your build. The coach tests changes in Path of Building before recommending them and cites its sources. Numbers it cannot trace are marked.</p>
+    </div>${st?.key ? renderModelPicker() : ""}</div>`;
+  if (!st) return `<div class="ask-page">${head}</div>`;
+  if (!st.key) return `<div class="ask-page">${head}${renderKeySetup()}</div>`;
+  const thread = ask.thread.length
+    ? `<div class="thread">${ask.thread.map(renderExchange).join("")}</div>`
+    : `<div class="suggestions">${SUGGESTIONS.map((q) => `<button class="suggestion" data-ask="${esc(q)}" ${ask.working ? 'aria-disabled="true"' : ""}>${esc(q)}</button>`).join("")}</div>`;
+  const composer = `
+    <div class="composer">
+      <textarea id="ask-input" class="paste ask-input" rows="2" spellcheck="true" placeholder="Ask about your build" ${ask.working ? "disabled" : ""}>${esc(ask.draft)}</textarea>
+      <div class="composer-actions">
+        <span class="faint">Enter to send, Shift+Enter for a new line</span>
+        <span class="composer-buttons">
+          ${ask.thread.length && !ask.working ? `<button class="link" data-action="new-conversation">New conversation</button>` : ""}
+          ${ask.working
+            ? `<button class="btn" data-action="stop-answer">Stop</button>`
+            : `<button class="btn primary" data-action="ask">Ask</button>`}
+        </span>
+      </div>
+    </div>`;
+  const keyLine = `<p class="key-line faint">${st.key === "saved"
+    ? `Your API key is saved in Windows Credential Manager. Questions are billed to your Anthropic account. <button class="link" data-action="remove-key">Remove key</button>`
+    : "Using the API key in ANTHROPIC_API_KEY. Questions are billed to that Anthropic account."}</p>`;
+  return `<div class="ask-page">${head}${thread}${composer}${keyLine}</div>`;
+}
+
+function renderModelPicker() {
+  const ask = state.ask;
+  return `<label class="field"><span class="label field-label">Model</span>
+    <select id="ask-model" class="input" ${ask.working ? "disabled" : ""}>
+      ${ask.status.models.map((m) => `<option value="${esc(m.id)}" ${m.id === ask.model ? "selected" : ""}>${esc(m.name)} · ${esc(m.note)}</option>`).join("")}
+    </select></label>`;
+}
+
+function renderKeySetup() {
+  return `<div class="panel setup"><div class="panel-body">
+    <h2>Set up the coach</h2>
+    <p class="muted">The coach is Claude, Anthropic's AI. It runs on your own Anthropic API key, so questions are billed to your Anthropic account, and each answer shows what it cost.</p>
+    <ol class="how">
+      <li>Sign in to the Anthropic Console and add credit under Billing.</li>
+      <li>Create an API key under API keys and copy it.</li>
+      <li>Paste it here.</li>
+    </ol>
+    <div class="key-form">
+      <input id="api-key" class="input" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" value="${esc(state.ask.keyDraft)}">
+      <button class="btn primary" data-action="save-key">Save key</button>
+      <button class="link" data-open="https://platform.claude.com/">Open the Anthropic Console</button>
+    </div>
+    <p class="faint small">The key is saved in Windows Credential Manager, not in a file, and is only sent to Anthropic.</p>
+  </div></div>`;
+}
+
+function renderExchange(entry) {
+  const question = `<div class="question">${esc(entry.question)}</div>`;
+  if (entry.live) return question + `<div class="answer" id="ask-live">${renderLive(entry.live)}</div>`;
+  if (entry.error) return question + `<div class="error" style="margin:0">${esc(entry.error)}</div>`;
+  if (!entry.answer) return question;
+  return question + `<div class="answer">${renderAnswer(entry.answer)}</div>`;
+}
+
+function renderLive(live) {
+  const steps = live.steps.length
+    ? `<ol class="live-steps">${live.steps.map((step) => `<li>${esc(step)}</li>`).join("")}</ol>`
+    : "";
+  const text = live.text ? `<div class="md">${markdown(live.text, [], [])}</div>` : "";
+  return `${steps}${text}<div class="track indeterminate live-track"><i></i></div>`;
+}
+
+function renderAnswer(a) {
+  const body = `<div class="md">${markdown(a.text, a.unverified, a.sources)}</div>`;
+  const sources = a.sources.length
+    ? `<ol class="sources">${a.sources.map((src) => `<li>${src.url
+        ? `<button class="link" data-open="${esc(src.url)}">${esc(src.title || src.url)}</button>`
+        : esc(src.title)}${src.quote ? `<span class="faint"> “${esc(src.quote)}”</span>` : ""}</li>`).join("")}</ol>`
+    : "";
+  const check = a.unverified.length
+    ? `<p class="number-check warn"><mark class="unverified">Marked</mark> numbers were not found in Path of Building's results or a cited source. Check them before you act on them.</p>`
+    : a.numbersChecked
+      ? `<p class="number-check ok">Every number was found in Path of Building's results or a cited source.</p>`
+      : "";
+  const note = a.note ? `<p class="number-check warn">${esc(a.note)}</p>` : "";
+  const model = state.ask.status?.models.find((m) => m.id === a.model)?.name ?? a.model;
+  const cost = a.cost == null ? "" : ` · $${a.cost < 0.1 ? a.cost.toFixed(3) : a.cost.toFixed(2)}`;
+  const steps = a.steps.length
+    ? `<details class="checked"><summary>How this was checked · ${a.steps.length} ${a.steps.length === 1 ? "step" : "steps"}</summary><ol>${a.steps.map((step) => `<li>${esc(step)}</li>`).join("")}</ol></details>`
+    : "";
+  return `${body}${note}${check}${sources}<div class="answer-foot">${steps}<span class="faint">${esc(model)}${cost}</span></div>`;
+}
+
+// A small Markdown subset (paragraphs, lists, tables, bold, italics, code)
+// rendered from escaped text, so nothing in an answer can become markup.
+// Numbers the check could not trace are marked; [n] links to source n.
+function markdown(text, unverified, sources) {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const out = [];
+  let para = [];
+  let list = null;
+  let table = [];
+  const flushPara = () => { if (para.length) out.push(`<p>${inline(para.join(" "), unverified, sources)}</p>`); para = []; };
+  const flushList = () => { if (list) out.push(`<${list.tag}>${list.items.map((i) => `<li>${inline(i, unverified, sources)}</li>`).join("")}</${list.tag}>`); list = null; };
+  const flushTable = () => {
+    if (!table.length) return;
+    const rows = table.filter((r) => !/^\|?[\s:|-]+\|?$/.test(r)).map((r) => r.replace(/^\||\|$/g, "").split("|").map((c) => c.trim()));
+    const [header, ...body] = rows;
+    out.push(`<table class="data md-table"><thead><tr>${header.map((c) => `<th>${inline(c, unverified, sources)}</th>`).join("")}</tr></thead><tbody>${body.map((r) => `<tr>${r.map((c) => `<td>${inline(c, unverified, sources)}</td>`).join("")}</tr>`).join("")}</tbody></table>`);
+    table = [];
+  };
+  const flush = () => { flushPara(); flushList(); flushTable(); };
+  for (const line of lines) {
+    const bullet = line.match(/^\s*[-*•]\s+(.*)$/);
+    const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    const heading = line.match(/^#{1,4}\s+(.*)$/);
+    if (/^\s*\|.*\|\s*$/.test(line)) { flushPara(); flushList(); table.push(line.trim()); continue; }
+    flushTable();
+    if (!line.trim()) { flushPara(); flushList(); continue; }
+    if (heading) { flush(); out.push(`<h4>${inline(heading[1], unverified, sources)}</h4>`); continue; }
+    if (bullet || numbered) {
+      flushPara();
+      const tag = bullet ? "ul" : "ol";
+      if (list && list.tag !== tag) flushList();
+      if (!list) list = { tag, items: [] };
+      list.items.push((bullet || numbered)[1]);
+      continue;
+    }
+    if (list && /^\s{2,}\S/.test(line)) { list.items[list.items.length - 1] += " " + line.trim(); continue; }
+    flushList();
+    para.push(line.trim());
+  }
+  flush();
+  return out.join("");
+}
+
+function inline(text, unverified, sources) {
+  let html = esc(text)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*\w])\*([^*\s][^*]*?)\*(?!\w)/g, "$1<em>$2</em>");
+  for (const n of unverified) {
+    const pattern = new RegExp(`(^|[^\\w.,])(${esc(n).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})(?![\\w]|[.,]\\d)`, "g");
+    html = html.replace(pattern, `$1<mark class="unverified" title="Not found in Path of Building's results or a cited source">$2</mark>`);
+  }
+  return html.replace(/ ?\[(\d+)\]/g, (match, n) => {
+    const src = sources[Number(n) - 1];
+    return src ? `<sup class="cite">${src.url ? `<button class="link" data-open="${esc(src.url)}">${n}</button>` : n}</sup>` : match;
+  });
 }
 
 // The landing page: can the numbers be trusted, the key numbers, what to
@@ -1006,7 +1288,7 @@ function delta(label, change) {
 // ---------------------------------------------------------------- events
 
 document.addEventListener("click", async (event) => {
-  const target = event.target.closest("[data-action],[data-view],[data-goal],[data-steps],[data-loss],[data-slot],[data-trade-goal],[data-open]");
+  const target = event.target.closest("[data-action],[data-view],[data-goal],[data-steps],[data-loss],[data-slot],[data-trade-goal],[data-open],[data-ask]");
   if (!target || target.getAttribute("aria-disabled") === "true") return;
   if (target.dataset.view) {
     state.view = target.dataset.view;
@@ -1021,6 +1303,7 @@ document.addEventListener("click", async (event) => {
         && state.overview.assumptions.some((a) => a.kind === "condition")) runRealistic();
     return;
   }
+  if (target.dataset.ask) { askQuestion(target.dataset.ask); return; }
   if (target.dataset.goal) { state.goal = target.dataset.goal; render(); return; }
   if (target.dataset.slot) { measureSlot(target.dataset.slot); return; }
   if (target.dataset.open) {
@@ -1039,6 +1322,14 @@ document.addEventListener("click", async (event) => {
       return;
     }
     case "reset": return resetBuild();
+    case "ask": return askQuestion(document.getElementById("ask-input")?.value ?? "");
+    case "stop-answer":
+      target.textContent = "Stopping…";
+      target.setAttribute("aria-disabled", "true");
+      return invoke("stop_answer");
+    case "new-conversation": return newConversation();
+    case "save-key": return saveKey();
+    case "remove-key": return removeKey();
     case "realistic": return runRealistic();
     case "check-item": return checkItem();
     case "open-trade": return openTrade();
@@ -1059,6 +1350,8 @@ document.addEventListener("click", async (event) => {
 document.addEventListener("input", (event) => {
   const id = event.target.id;
   if (id === "item-paste") state.itemText = event.target.value;
+  if (id === "ask-input") state.ask.draft = event.target.value;
+  if (id === "api-key") state.ask.keyDraft = event.target.value;
   if (id === "league" || id === "max-price") {
     state.trade[id === "league" ? "league" : "maxPrice"] = event.target.value;
     tradeChanged();
@@ -1066,6 +1359,11 @@ document.addEventListener("input", (event) => {
 });
 
 document.addEventListener("change", (event) => {
+  if (event.target.id === "ask-model") {
+    state.ask.model = event.target.value;
+    saveModel();
+    return;
+  }
   if (event.target.id === "currency" || event.target.id === "any-base") {
     if (event.target.id === "currency") state.trade.currency = event.target.value;
     else state.trade.anyBase = event.target.checked;
@@ -1084,11 +1382,17 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && event.target.id === "paste") {
     document.querySelector('[data-action="load"]')?.click();
   }
+  if (event.key === "Enter" && !event.shiftKey && event.target.id === "ask-input") {
+    event.preventDefault();
+    askQuestion(event.target.value);
+  }
+  if (event.key === "Enter" && event.target.id === "api-key") saveKey();
   if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && event.target.id === "item-paste") {
     document.querySelector('[data-action="check-item"]')?.click();
   }
 });
 
 refreshEngine().catch((err) => { state.error = String(err); render(); });
+refreshAsk().catch(() => {});
 checkForUpdate().catch(() => {});
 render();

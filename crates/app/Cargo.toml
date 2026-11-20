@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 analysis.workspace = true
+assistant.workspace = true
 pob.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -16,6 +17,10 @@ sha2.workspace = true
 ureq.workspace = true
 tauri = { version = "2.12", features = [] }
 tauri-plugin-opener = "2"
+
+# The coach's API key lives in Windows Credential Manager.
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3.6", features = ["windows-native"] }
 
 [build-dependencies]
 tauri-build = { version = "2.7", features = [] }

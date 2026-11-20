@@ -3,6 +3,70 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-20: Ask the coach (an AI coach that does not guess)
+
+**Goal (from user):** "a genuinely good AI coach that doesn't hallucinate
+and is precise and accurate with info."
+
+**Design.** Grounding is built into the structure, not asked of the model:
+
+- *Numbers about the build* reach Claude only as PoB's output: the overview,
+  diagnosis, coach brief, realistic numbers and a new `bd_build_details`
+  (items with mod lines, skill groups, allocated keystones / notables /
+  ascendancy passives with PoB's text). To judge a change it must call a tool
+  that runs PoB: `what_if_modifiers` (lines added to Custom Modifiers, settled,
+  restored), `equip_item` (the item check), `slot_values` (gear stat values),
+  `get_stats` (any PoB output key, or a search over them).
+- *Game facts* come from PoB's data (`find_unique`, `gem_info`: the gem's
+  stats at a level in the game's own wording, via PoB's stat describer) or
+  from web search / fetch limited to poe2wiki.net, poe2db.tw,
+  pathofexile.com, maxroll.gg and mobalytics.gg, with citations. A gem
+  that does not exist comes back "not found", never invented.
+- *The number check* (`assistant::grounding`): every number in an answer is
+  matched, at the precision it was written, against everything Claude was
+  given (build data, tool inputs and results, the question, cited passages,
+  fetched pages). Unmatched numbers are returned and marked in the app;
+  the answer says when every number was found.
+- The system prompt states the rules plainly (no estimates, no arithmetic
+  on build numbers, no item / gem descriptions from memory, PoE2 is not PoE1,
+  say "I don't know"), and how to answer (lead with the recommendation, PoB's
+  before / after, the trade-off, why).
+
+**API.** New crate `assistant`. Rust has no official Anthropic SDK, so it
+calls the Messages API over HTTP (ureq) and parses the event stream itself,
+keeping every content block exactly as received (thinking signatures, search
+results, citations) for the next request. Claude Opus 5.5 by default
+(Sonnet 5.5 selectable, about half the cost), adaptive thinking at high
+effort, automatic prompt caching (the build data is cached after the first
+request), server-side refusal fallback (`fallbacks: "default"`). Tool input
+streams unbuffered (`eager_input_streaming`), so it is parsed strictly; a
+malformed one is answered with an `INVALID_JSON` error, never run. Rate
+limits and overloads are retried; a failed or stopped question is rolled
+back so the conversation stays valid. Cost per answer is computed from the
+reported token counts at Anthropic's list prices (checked 2026-11-20 on
+the pricing page: Opus 5.5 $4 / $5 cache write / $0.20 cache read / $20
+output per million tokens; Sonnet 5.5 $2 / $2.50 / $0.10 / $10; web search
+$10 per 1,000).
+
+**App.** New page "Ask the coach" (second in the nav). Setup explains the
+key and billing; the key is saved in Windows Credential Manager (`keyring`),
+never in a file; `ANTHROPIC_API_KEY` also works. Answers stream; the steps
+("Tested in PoB: +40 to maximum Life", "Searched: …") show as they happen
+and stay under "How this was checked". Sources are numbered and open in the
+browser; marked numbers are highlighted. The link allow-list is now by host
+(the five sites and Anthropic's console). CLI: `doctor ask <build> "<q>"`.
+
+**Tests.** Unit tests for the stream parser (text, tool input split across
+deltas, a cut-off input, citations, usage, errors), the number check
+(precision, k/M, percentages, versions, counts), prices, request shape,
+citations to numbered sources, tool schemas. PoB lookups tested against
+0.23.1. End to end against a local server speaking the API's event stream:
+real PoB tool calls on a fixture build, the history sent back correctly
+(thinking block with signature, all tool results in one message, the bad
+call as an error), a made-up "999,999" flagged while PoB's 1,641 → 1,683
+passed, a follow-up question, the API unreachable, the no-key setup screen.
+No paid API call was made.
+
 ## 2026-11-20: CI no longer installs WebKit on Linux
 
 The coach commit's release did not go out: the lint job spent its whole

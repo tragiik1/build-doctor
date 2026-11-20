@@ -59,6 +59,13 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
     ),
 ];
 
+/// Every stat the overview shows: (PoB stat, group, label).
+pub fn shown_stats() -> impl Iterator<Item = (&'static str, &'static str, &'static str)> {
+    GROUPS
+        .iter()
+        .flat_map(|(group, stats)| stats.iter().map(move |(key, label)| (*key, *group, *label)))
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Overview {

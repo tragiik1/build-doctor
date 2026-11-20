@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/pob", "crates/analysis", "crates/doctor", "crates/app"]
+members = ["crates/pob", "crates/analysis", "crates/assistant", "crates/doctor", "crates/app"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +12,7 @@ publish = false
 [workspace.dependencies]
 pob = { path = "crates/pob" }
 analysis = { path = "crates/analysis" }
+assistant = { path = "crates/assistant" }
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive", "env"] }
 flate2 = "1"

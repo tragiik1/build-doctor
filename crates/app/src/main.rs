@@ -6,6 +6,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod key;
 mod update;
 
 use std::collections::HashMap;
@@ -16,6 +17,7 @@ use analysis::{
     Brief, Diagnosis, Gear, Goal, ItemCheck, Overview, Plan, PlanOptions, PlanProgress, Realistic,
     SlotValues, TradeOptions,
 };
+use assistant::{Answer, Bench, Client, Conversation, Progress};
 use pob::{DataDir, Pool};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -33,6 +35,9 @@ struct AppState {
     /// kept for the current one.
     loads: AtomicU64,
     cancel: Arc<AtomicBool>,
+    /// The AI coach's conversation, with the build load it is about.
+    conversation: Arc<Mutex<Option<(u64, Conversation)>>>,
+    stop_answer: Arc<AtomicBool>,
 }
 
 type CommandResult<T> = Result<T, String>;
@@ -174,21 +179,28 @@ fn trade_link(
     analysis::trade_url(values, &options).map_err(|e| e.to_string())
 }
 
-/// Links the app may open in the browser: trade searches and the pages the
-/// coach cites.
-const OPENABLE: &[&str] = &[
-    "https://www.pathofexile.com/trade2/search/",
-    "https://www.poe2wiki.net/wiki/",
-    "https://maxroll.gg/poe2/",
-    "https://mobalytics.gg/poe-2/",
-];
+/// Whether the app may open `url` in the browser: trade searches and the
+/// sites the coaches cite (the AI coach searches only these), and
+/// Anthropic's console for an API key. HTTPS only.
+fn openable(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    assistant::tools::SITES
+        .iter()
+        .chain(&["platform.claude.com"])
+        .any(|site| host == *site || host.strip_suffix(site).is_some_and(|h| h.ends_with('.')))
+}
 
 /// Opens a trade search or a cited page in the default browser.
 #[tauri::command]
 fn open_link(app: AppHandle, url: String) -> CommandResult<()> {
     use tauri_plugin_opener::OpenerExt;
-    if !OPENABLE.iter().any(|prefix| url.starts_with(prefix)) {
-        return Err("Only trade searches and the pages the coach cites can be opened.".into());
+    if !openable(&url) {
+        return Err(
+            "Only trade searches, cited pages and Anthropic's console can be opened.".into(),
+        );
     }
     app.opener()
         .open_url(url, None::<&str>)
@@ -230,6 +242,133 @@ async fn plan(
         Ok(analysis::plan(&pool, &xml, &options, &progress, &|| {
             cancel.load(Ordering::SeqCst)
         })?)
+    })
+    .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CoachModel {
+    id: &'static str,
+    name: &'static str,
+    note: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AskStatus {
+    /// Where the API key comes from, if there is one.
+    key: Option<key::Source>,
+    models: Vec<CoachModel>,
+}
+
+#[tauri::command]
+fn ask_status() -> AskStatus {
+    AskStatus {
+        key: key::get().map(|(_, source)| source),
+        models: assistant::price::MODELS
+            .iter()
+            .map(|&(id, name, note)| CoachModel { id, name, note })
+            .collect(),
+    }
+}
+
+#[tauri::command]
+fn save_api_key(key: String) -> CommandResult<()> {
+    key::save(&key)
+}
+
+#[tauri::command]
+fn remove_api_key() -> CommandResult<()> {
+    key::remove()
+}
+
+#[derive(Clone, Serialize)]
+#[serde(tag = "kind", content = "text", rename_all = "camelCase")]
+enum AskProgress {
+    Text(String),
+    Step(String),
+}
+
+/// Asks the AI coach about the loaded build. The conversation starts from
+/// the build's PoB results (computing the diagnosis if it is not in yet)
+/// and continues until another build is loaded or a new one is started.
+#[tauri::command]
+async fn ask(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    question: String,
+    model: String,
+) -> CommandResult<Answer> {
+    let question = question.trim().to_owned();
+    if question.is_empty() {
+        return Err("Type a question first.".into());
+    }
+    if !assistant::price::MODELS.iter().any(|(id, ..)| *id == model) {
+        return Err(format!("Unknown model {model}."));
+    }
+    let (api_key, _) = key::get().ok_or("Add your Anthropic API key first.")?;
+    let load = state.loads.load(Ordering::SeqCst);
+    let (pool, xml) = (pool(&state)?, build(&state)?);
+    let (overview, diagnosis, realistic) = {
+        let r = state.results.lock().map_err(|e| e.to_string())?;
+        (r.overview.clone(), r.diagnosis.clone(), r.realistic.clone())
+    };
+    let overview = overview.ok_or("Load a build first.")?;
+    let conversation = Arc::clone(&state.conversation);
+    let stop = Arc::clone(&state.stop_answer);
+    stop.store(false, Ordering::SeqCst);
+    // For tests against a local server.
+    let base = std::env::var("BUILD_DOCTOR_API_URL").ok();
+    blocking(move || {
+        let mut slot = conversation.lock().map_err(|e| e.to_string())?;
+        let bench = Bench {
+            pool: &pool,
+            xml: &xml,
+        };
+        if slot.as_ref().is_none_or(|(l, _)| *l != load) {
+            let diagnosis = match diagnosis {
+                Some(d) => d,
+                None => analysis::diagnose(&pool, &xml)?,
+            };
+            let brief = analysis::brief(&overview, &diagnosis, realistic.as_ref());
+            let context = assistant::build_context(
+                bench,
+                &overview,
+                Some(&diagnosis),
+                Some(&brief),
+                realistic.as_ref(),
+            )?;
+            *slot = Some((load, Conversation::new(context)));
+        }
+        let (_, conversation) = slot.as_mut().expect("set above");
+        let client = Client::new(&api_key, base.as_deref());
+        let answer = conversation.ask(&client, &model, bench, &question, &stop, &mut |p| {
+            let event = match p {
+                Progress::Text(t) => AskProgress::Text(t),
+                Progress::Step(s) => AskProgress::Step(s),
+            };
+            let _ = app.emit("ask-progress", event);
+        })?;
+        Ok(answer)
+    })
+    .await
+}
+
+#[tauri::command]
+fn stop_answer(state: State<'_, AppState>) {
+    state.stop_answer.store(true, Ordering::SeqCst);
+}
+
+/// Forgets the coach's conversation; the next question starts afresh. Waits
+/// for an answer in progress to stop.
+#[tauri::command]
+async fn new_conversation(state: State<'_, AppState>) -> CommandResult<()> {
+    state.stop_answer.store(true, Ordering::SeqCst);
+    let conversation = Arc::clone(&state.conversation);
+    blocking(move || {
+        *conversation.lock().map_err(|e| e.to_string())? = None;
+        Ok(())
     })
     .await
 }
@@ -332,6 +471,8 @@ fn main() {
             results: Mutex::new(Results::default()),
             loads: AtomicU64::new(0),
             cancel: Arc::new(AtomicBool::new(false)),
+            conversation: Arc::new(Mutex::new(None)),
+            stop_answer: Arc::new(AtomicBool::new(false)),
         })
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
@@ -348,6 +489,12 @@ fn main() {
             realistic,
             plan,
             cancel_plan,
+            ask_status,
+            save_api_key,
+            remove_api_key,
+            ask,
+            stop_answer,
+            new_conversation,
             app_info,
             check_update,
             install_update
@@ -357,4 +504,33 @@ fn main() {
             eprintln!("Build Doctor could not start: {err}");
             std::process::exit(1);
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::openable;
+
+    #[test]
+    fn opens_only_the_allowed_sites() {
+        for url in [
+            "https://www.pathofexile.com/trade2/search/poe2/Standard?q=%7B%7D",
+            "https://pathofexile.com/forum/view-thread/1",
+            "https://www.poe2wiki.net/wiki/Resistance",
+            "https://poe2db.tw/us/Snap",
+            "https://maxroll.gg/poe2/build-guides/x",
+            "https://mobalytics.gg/poe-2/guides/armour",
+            "https://platform.claude.com/",
+        ] {
+            assert!(openable(url), "{url}");
+        }
+        for url in [
+            "http://www.poe2wiki.net/wiki/Resistance",
+            "https://evilpathofexile.com/",
+            "https://poe2wiki.net.evil.com/",
+            "https://example.com/?https://maxroll.gg/",
+            "file:///C:/Windows",
+        ] {
+            assert!(!openable(url), "{url}");
+        }
+    }
 }

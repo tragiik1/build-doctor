@@ -1,5 +1,6 @@
 //! `doctor`: Path of Exile 2 build doctor.
 
+mod ask;
 mod check;
 mod coach;
 mod conditions;
@@ -51,6 +52,22 @@ enum Command {
         /// List every stat, not just the summary.
         #[arg(long)]
         all: bool,
+    },
+
+    /// Ask the AI coach about the build. Needs your Anthropic API key in
+    /// ANTHROPIC_API_KEY; each question is billed to that account.
+    Ask {
+        /// A PoB code, a path to a code or XML file, or a build link.
+        build: String,
+        /// The question, in quotes.
+        question: String,
+        /// The Claude model to ask.
+        #[arg(long, default_value = "claude-opus-5-5")]
+        model: String,
+        #[arg(long, default_value = PINNED_POB)]
+        pob: String,
+        #[arg(long)]
+        jobs: Option<usize>,
     },
 
     /// The coach: what the build's numbers mean and what to do, in order.
@@ -340,6 +357,17 @@ fn run(cli: Cli) -> AnyResult<ExitCode> {
                 return print_json(&analysis::overview(&pool, &xml)?);
             }
             return check::run(&pool, &xml, all);
+        }
+        Command::Ask {
+            build,
+            question,
+            model,
+            pob,
+            jobs,
+        } => {
+            let pool = pob::Pool::new(&installed(&data, &pob)?, jobs.unwrap_or_else(default_jobs))?;
+            let xml = pob::input::read_build(&build)?;
+            return ask::run(&pool, &xml, &question, &model);
         }
         Command::Coach { build, pob, jobs } => {
             let pool = pob::Pool::new(&installed(&data, &pob)?, jobs.unwrap_or_else(default_jobs))?;

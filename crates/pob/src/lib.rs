@@ -19,6 +19,7 @@ mod gear;
 pub mod input;
 mod install;
 mod item;
+mod lookup;
 mod pool;
 mod stats;
 mod tree;

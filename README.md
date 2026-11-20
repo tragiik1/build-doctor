@@ -21,6 +21,14 @@ file verified). Then paste a PoB code or link:
   what to do, in order: each step says why (the mechanic, with your
   numbers), how (including where the stat rolls on gear), what PoB says it
   changes, and links its source.
+- **Ask the coach**: any question about your build, answered by Claude
+  (Anthropic's AI) working through Path of Building. It tests a change in
+  PoB before it recommends it, looks uniques and gems up in PoB's game data,
+  and searches only the PoE2 wiki, poe2db, pathofexile.com, maxroll and
+  mobalytics, citing what it uses. Every number in an answer is checked
+  against PoB's results and the cited passages; any it cannot trace is
+  marked. It runs on your own Anthropic API key (kept in Windows Credential
+  Manager), and each answer shows what it cost.
 - **Diagnosis**: every finding, measured. Elemental resistances
   below their maximum, chaos resistance one mod at a time, hit chance below
   100%, each with the amount needed and what PoB says it changes; a
@@ -62,6 +70,7 @@ doctor engine install                 # download PoB2 0.23.1 and verify every fi
 doctor check <code | file | link>     # calculate a build, compare with its saved stats
 doctor check <...> --all              # every stat PoB produced, exactly as PoB wrote it
 doctor coach <build>                  # what to do, in order, and why
+doctor ask <build> "<question>"       # the AI coach (ANTHROPIC_API_KEY; billed to that account)
 doctor diagnose <build>               # what to fix first, each fix measured by PoB
 doctor item <build> <item.txt>        # is this item an upgrade? (- reads it from stdin)
 doctor gear <build> [--slot "Ring 1" --league Standard]
