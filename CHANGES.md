@@ -3,6 +3,60 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-20: The coach: "Your build", what to do and why
+
+**Goal (from user):** "explain to me what to do, why I need this, detailed …
+like a professional player / build theorycrafter … I am honestly lost."
+
+**Design.** An expert is trusted for two things: knowing the game's
+mechanics and knowing your numbers. The app already had the numbers
+exactly; it lacked the explanation and the order of operations. The coach
+(`analysis::coach::brief`, `doctor coach`, the app's new first page "Your
+build") is a pure function over the overview, the diagnosis and the
+realistic numbers: no PoB calls, every number one of those results, every
+mechanic explained in general terms that match public sources (linked on
+each step). Game-version-dependent numbers the sources disagree on (armour
+formula constant, evasion and energy shield timings) are not quoted.
+
+**What it shows**
+- Verdict: who the build is, its damage, how much of it rests on assumed
+  conditions, its weakest and strongest max hit, EHP, and the first
+  priority.
+- What to do, in order (at most 6): PoB's own problems (they make the
+  numbers wrong for the character: negative Spirit, too many skill groups,
+  unmet requirements, unaffordable used skills, a non-endgame resistance
+  penalty); elemental resistances to their maximum and chaos resistance one
+  mod at a time, with the damage-taken ratio in plain words ("at -2% you
+  take about 4 times the lightning damage you would at 75%"), how much is
+  needed and where it rolls (item categories and highest roll from PoB's
+  data); a weak point step when one hit type lags far behind (below 60% of
+  the next); hit chance; the skill-level mod with the most reachable value
+  (gain per level times the highest roll one mod can have, so "+1 to all
+  skills" on amulets only does not beat "+# lightning spell skills", which
+  rolls up to +7 on weapons); a reality check when assumed conditions carry
+  more than 20% of the damage; then the passive tree plan and gear upgrades.
+  Each step: why, how, PoB's measured result, a button to the page that
+  does it, and its source.
+- How your build works: damage (number, what scales it, what it depends
+  on) and defence (pools, max hits, resistances, armour and evasion when
+  they matter).
+- What the terms mean: max hit, Total EHP, Full DPS, conditions, resistance
+  penalty, Spirit.
+- App: the diagnosis, then the realistic numbers run in the background after
+  a build loads; the brief appears after the diagnosis and is refreshed
+  when the realistic numbers arrive. The app keeps the latest results per
+  build (dropped when another build loads). Links open in the browser only
+  for trade searches and the cited sites (PoE2 wiki, Maxroll, Mobalytics).
+
+**What was tested**
+- Unit tests: damage-taken ratios in words, number formatting, where a stat
+  rolls, choice of the skill-level mod. Analysis 19.
+- `doctor coach` on the Spark Infernalist, Snap Shaman, Ice Shot Deadeye and
+  Thorns Legionnaire; app screenshots of the page.
+
+Sources for the mechanics: poe2wiki Resistance, Maximum Resistances, Chaos
+resistance, Accuracy; Maxroll spirit guide; Mobalytics armour guide.
+
 ## 2026-11-20: Restore check: whole config elements, any attribute order
 
 **Problem:** the diagnosis still failed now and then ("did not return to

@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use analysis::{
-    Diagnosis, Gear, Goal, ItemCheck, Overview, Plan, PlanOptions, PlanProgress, Realistic,
+    Brief, Diagnosis, Gear, Goal, ItemCheck, Overview, Plan, PlanOptions, PlanProgress, Realistic,
     SlotValues, TradeOptions,
 };
 use pob::{DataDir, Pool};
@@ -27,6 +27,8 @@ struct AppState {
     build: Mutex<Option<String>>,
     /// Gear values measured for the loaded build, by slot.
     gear: Mutex<HashMap<String, SlotValues>>,
+    /// The latest results for the loaded build, for the coach.
+    results: Mutex<Results>,
     /// Counts build loads, so work started for an earlier build is not
     /// kept for the current one.
     loads: AtomicU64,
@@ -34,6 +36,25 @@ struct AppState {
 }
 
 type CommandResult<T> = Result<T, String>;
+
+/// What the coach builds its brief from.
+#[derive(Default)]
+struct Results {
+    overview: Option<Overview>,
+    diagnosis: Option<Diagnosis>,
+    realistic: Option<Realistic>,
+}
+
+impl AppState {
+    /// Keeps `store`'s result if no other build was loaded since `load`.
+    fn keep(&self, load: u64, store: impl FnOnce(&mut Results)) -> CommandResult<()> {
+        let mut results = self.results.lock().map_err(|e| e.to_string())?;
+        if self.loads.load(Ordering::SeqCst) == load {
+            store(&mut results);
+        }
+        Ok(())
+    }
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,13 +101,31 @@ async fn load_build(state: State<'_, AppState>, input: String) -> CommandResult<
     *state.build.lock().map_err(|e| e.to_string())? = Some(xml);
     state.loads.fetch_add(1, Ordering::SeqCst);
     state.gear.lock().map_err(|e| e.to_string())?.clear();
+    *state.results.lock().map_err(|e| e.to_string())? = Results {
+        overview: Some(overview.clone()),
+        ..Results::default()
+    };
     Ok(overview)
 }
 
 #[tauri::command]
 async fn diagnose(state: State<'_, AppState>) -> CommandResult<Diagnosis> {
+    let load = state.loads.load(Ordering::SeqCst);
     let (pool, xml) = (pool(&state)?, build(&state)?);
-    blocking(move || Ok(analysis::diagnose(&pool, &xml)?)).await
+    let diagnosis = blocking(move || Ok(analysis::diagnose(&pool, &xml)?)).await?;
+    state.keep(load, |r| r.diagnosis = Some(diagnosis.clone()))?;
+    Ok(diagnosis)
+}
+
+/// The coach's brief from the results so far; needs the diagnosis, and uses
+/// the realistic numbers when they are in.
+#[tauri::command]
+fn coach(state: State<'_, AppState>) -> CommandResult<Brief> {
+    let results = state.results.lock().map_err(|e| e.to_string())?;
+    match (&results.overview, &results.diagnosis) {
+        (Some(o), Some(d)) => Ok(analysis::brief(o, d, results.realistic.as_ref())),
+        _ => Err("The diagnosis is not finished yet.".into()),
+    }
 }
 
 #[tauri::command]
@@ -135,13 +174,21 @@ fn trade_link(
     analysis::trade_url(values, &options).map_err(|e| e.to_string())
 }
 
-/// Opens a trade search in the default browser. Only trade-site search
-/// links are opened.
+/// Links the app may open in the browser: trade searches and the pages the
+/// coach cites.
+const OPENABLE: &[&str] = &[
+    "https://www.pathofexile.com/trade2/search/",
+    "https://www.poe2wiki.net/wiki/",
+    "https://maxroll.gg/poe2/",
+    "https://mobalytics.gg/poe-2/",
+];
+
+/// Opens a trade search or a cited page in the default browser.
 #[tauri::command]
-fn open_trade(app: AppHandle, url: String) -> CommandResult<()> {
+fn open_link(app: AppHandle, url: String) -> CommandResult<()> {
     use tauri_plugin_opener::OpenerExt;
-    if !url.starts_with("https://www.pathofexile.com/trade2/search/") {
-        return Err("Only trade site searches can be opened.".into());
+    if !OPENABLE.iter().any(|prefix| url.starts_with(prefix)) {
+        return Err("Only trade searches and the pages the coach cites can be opened.".into());
     }
     app.opener()
         .open_url(url, None::<&str>)
@@ -150,8 +197,11 @@ fn open_trade(app: AppHandle, url: String) -> CommandResult<()> {
 
 #[tauri::command]
 async fn realistic(state: State<'_, AppState>, kept: Vec<String>) -> CommandResult<Realistic> {
+    let load = state.loads.load(Ordering::SeqCst);
     let (pool, xml) = (pool(&state)?, build(&state)?);
-    blocking(move || Ok(analysis::realistic(&pool, &xml, &kept)?)).await
+    let realistic = blocking(move || Ok(analysis::realistic(&pool, &xml, &kept)?)).await?;
+    state.keep(load, |r| r.realistic = Some(realistic.clone()))?;
+    Ok(realistic)
 }
 
 #[tauri::command]
@@ -279,6 +329,7 @@ fn main() {
             pool: Mutex::new(None),
             build: Mutex::new(None),
             gear: Mutex::new(HashMap::new()),
+            results: Mutex::new(Results::default()),
             loads: AtomicU64::new(0),
             cancel: Arc::new(AtomicBool::new(false)),
         })
@@ -292,7 +343,8 @@ fn main() {
             gear,
             slot_values,
             trade_link,
-            open_trade,
+            open_link,
+            coach,
             realistic,
             plan,
             cancel_plan,

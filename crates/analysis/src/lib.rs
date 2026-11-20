@@ -2,6 +2,7 @@
 //! decides what to calculate and returns plain data that front ends (the CLI,
 //! the desktop app) only present.
 //!
+//! - [`coach`]: what the numbers mean and what to do, in order.
 //! - [`diagnose`]: what is wrong with a build, each fix measured by PoB.
 //! - [`gear`]: what each gear stat is worth, and a trade search ranked by it.
 //! - [`item`]: whether an item is an upgrade, slot by slot.
@@ -11,6 +12,7 @@
 //!   numbers without them.
 //! - [`plan`]: a step-by-step passive tree plan, each step exact.
 
+pub mod coach;
 pub mod diagnose;
 pub mod gear;
 pub mod item;
@@ -21,6 +23,7 @@ pub mod realistic;
 use pob::Summary;
 use serde::Serialize;
 
+pub use coach::{Brief, brief};
 pub use diagnose::{Diagnosis, Finding, Severity, diagnose};
 pub use gear::{Gear, SlotValues, TradeOptions, gear, slot_values, trade_url};
 pub use item::{ItemCheck, item_check};

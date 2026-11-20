@@ -17,7 +17,11 @@ swaps itself in place. Windows 11 already has the WebView2 runtime it uses. On f
 start it offers to install Path of Building (one download, ~390 MB, every
 file verified). Then paste a PoB code or link:
 
-- **Diagnosis** (the first page): what to fix first. Elemental resistances
+- **Your build** (the first page): the coach. What your numbers mean and
+  what to do, in order: each step says why (the mechanic, with your
+  numbers), how (including where the stat rolls on gear), what PoB says it
+  changes, and links its source.
+- **Diagnosis**: every finding, measured. Elemental resistances
   below their maximum, chaos resistance one mod at a time, hit chance below
   100%, each with the amount needed and what PoB says it changes; a
   resistance penalty that is not the endgame one; PoB's warnings that
@@ -57,6 +61,7 @@ The binary is `target/release/doctor` (`doctor.exe` on Windows).
 doctor engine install                 # download PoB2 0.23.1 and verify every file
 doctor check <code | file | link>     # calculate a build, compare with its saved stats
 doctor check <...> --all              # every stat PoB produced, exactly as PoB wrote it
+doctor coach <build>                  # what to do, in order, and why
 doctor diagnose <build>               # what to fix first, each fix measured by PoB
 doctor item <build> <item.txt>        # is this item an upgrade? (- reads it from stdin)
 doctor gear <build> [--slot "Ring 1" --league Standard]

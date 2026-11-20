@@ -8,7 +8,8 @@ const state = {
   engine: null,          // { installed, pinned }
   busy: null,            // { title, detail, progress: 0..1 | null }
   error: null,
-  view: "diagnosis",     // diagnosis | item | plan | realistic | stats
+  view: "brief",         // brief | diagnosis | gear | item | plan | realistic | stats
+  brief: null,           // { status: "running" | "done" | "error", result, error }
   overview: null,
   diagnosis: null,       // { status: "running" | "done" | "error", result, error }
   itemText: "",
@@ -185,22 +186,55 @@ async function loadBuild(input) {
   state.itemCheck = null;
   state.gear = null;
   state.gearLoading = false;
-  state.view = "diagnosis";
+  state.view = "brief";
   render();
 }
 
 // Runs in the background after a build loads; the overview fills it in when
 // it arrives, unless another build was loaded meanwhile.
+// Runs in the background after a build loads: the diagnosis, then the
+// coach's brief from it, then the realistic numbers and the brief again with
+// them. Results for a build loaded meanwhile are dropped.
 async function runDiagnosis() {
   const seq = ++state.loadSeq;
+  const current = () => seq === state.loadSeq;
   state.diagnosis = { status: "running" };
+  state.brief = { status: "running" };
   try {
     const result = await invoke("diagnose");
-    if (seq === state.loadSeq) state.diagnosis = { status: "done", result };
+    if (!current()) return;
+    state.diagnosis = { status: "done", result };
   } catch (err) {
-    if (seq === state.loadSeq) state.diagnosis = { status: "error", error: String(err) };
+    if (!current()) return;
+    state.diagnosis = { status: "error", error: String(err) };
+    state.brief = { status: "error", error: String(err) };
+    render();
+    return;
   }
-  if (seq === state.loadSeq) render();
+  await refreshBrief(current);
+  try {
+    if (!state.realistic) {
+      const realistic = await invoke("realistic", { kept: [] });
+      if (!current()) return;
+      if (!state.realistic) {
+        state.realistic = realistic;
+        state.realisticKept = new Set();
+      }
+    }
+  } catch {
+    // The brief stands without the realistic numbers.
+  }
+  if (current()) await refreshBrief(current);
+}
+
+async function refreshBrief(current) {
+  try {
+    const result = await invoke("coach");
+    if (current()) state.brief = { status: "done", result, withRealistic: !!state.realistic };
+  } catch (err) {
+    if (current()) state.brief = { status: "error", error: String(err) };
+  }
+  if (current()) render();
 }
 
 // Reads the worn items (instant) the first time the page opens. Not a
@@ -257,7 +291,7 @@ async function openTrade() {
   const url = await tradeLink();
   if (!url) return;
   try {
-    await invoke("open_trade", { url });
+    await invoke("open_link", { url });
     state.gear.opened = true;
     render();
   } catch (err) {
@@ -312,6 +346,7 @@ function resetBuild() {
   state.loadSeq++;
   state.overview = null;
   state.diagnosis = null;
+  state.brief = null;
   state.realistic = null;
   state.plan = null;
   state.error = null;
@@ -402,7 +437,8 @@ function renderRail() {
   const conditions = state.overview.assumptions.filter((a) => a.kind === "condition").length;
   const findings = state.diagnosis?.status === "done" ? state.diagnosis.result.findings.filter((f) => f.severity !== "note").length : null;
   const nav = [
-    ["diagnosis", "Diagnosis", "What to fix first", findings ? `${findings}` : ""],
+    ["brief", "Your build", "What to do, and why", ""],
+    ["diagnosis", "Diagnosis", "Every finding, measured", findings ? `${findings}` : ""],
     ["gear", "Gear upgrades", "What to buy next", ""],
     ["item", "Check an item", "Is it an upgrade?", ""],
     ["plan", "Passive tree plan", "Free gains from respecs", state.plan ? `${state.plan.steps.length} steps` : ""],
@@ -429,7 +465,7 @@ function renderRail() {
     </aside>`;
 }
 
-const PAGES = { diagnosis: "Diagnosis", gear: "Gear upgrades", item: "Check an item", plan: "Passive tree plan", realistic: "Realistic numbers", stats: "Stats" };
+const PAGES = { brief: "Your build", diagnosis: "Diagnosis", gear: "Gear upgrades", item: "Check an item", plan: "Passive tree plan", realistic: "Realistic numbers", stats: "Stats" };
 
 function renderView() {
   const here = !state.busy || state.busy.view === state.view;
@@ -443,12 +479,70 @@ function renderView() {
   if (state.view === "item") return elsewhere + renderItem() + error;
   if (state.view === "gear") return elsewhere + renderGear() + error;
   if (state.view === "stats") return elsewhere + renderStats() + error;
+  if (state.view === "brief") return elsewhere + renderBrief() + error;
   return elsewhere + renderDiagnosisPage() + error;
 }
 
 function stat(group, name) {
   for (const g of state.overview.groups) for (const r of g.rows) if (r.stat === name) return r.value;
   return null;
+}
+
+// The coach: what the numbers mean and what to do, in order.
+const TOOL_PAGES = { gear: "Gear upgrades", item: "Check an item", plan: "Passive tree plan", realistic: "Realistic numbers" };
+
+const TERMS = [
+  ["Max hit", "The biggest single hit of one damage type you survive from full, as Path of Building calculates it against the enemy set in its configuration."],
+  ["Total EHP", "Path of Building's effective hit pool: one number for how much damage it takes to kill you, counting life, energy shield and mitigation."],
+  ["Full DPS", "Damage per second of every skill the build includes in Full DPS, added together. Builds without it use the main skill's DPS."],
+  ["Conditions", "Settings in Path of Building that say a combat state is always true, such as an enemy being shocked. They only count if you keep them up."],
+  ["Resistance penalty", "From the endgame on, the game lowers your elemental resistances by 60%, so gear has to make up for it."],
+  ["Spirit", "The resource that pays for persistent skills: auras, buffs and permanent minions."],
+];
+
+function renderBrief() {
+  const head = `
+    <div class="page-head"><div>
+      <h1>Your build</h1>
+      <p>What your numbers mean and what to do, in order. Every number is Path of Building's; every explanation of the game links its source.</p>
+    </div></div>`;
+  const b = state.brief;
+  if (!b || b.status === "running") {
+    return head + `<div class="panel progress">
+      <div class="phase"><strong>Working out your plan</strong><span class="muted">Path of Building is testing fixes, skill levels and combat conditions on your build. About half a minute.</span></div>
+      <div class="track indeterminate"><i></i></div>
+    </div>`;
+  }
+  if (b.status === "error") {
+    return head + `<div class="panel"><div class="panel-body" style="padding-top:16px"><p class="muted" style="margin:0 0 10px">The plan could not be worked out. The other pages still work.</p><div class="error" style="margin:0">${esc(b.error)}</div></div></div>`;
+  }
+  const r = b.result;
+  const verdict = `<div class="panel brief-verdict"><div class="panel-body">${r.verdict.map((v) => `<p>${esc(v)}</p>`).join("")}</div></div>`;
+  const steps = `<div class="section-head"><h2>What to do, in order</h2>${b.withRealistic ? "" : `<span class="meta">Adding the realistic numbers…</span>`}</div>
+    <ol class="plan-steps">${r.steps.map((s, i) => `
+      <li class="panel plan-step">
+        <div class="step-n">${i + 1}</div>
+        <div class="step-body">
+          <h3>${esc(s.title)}</h3>
+          <dl>
+            <dt>Why</dt><dd>${esc(s.why)}</dd>
+            <dt>How</dt><dd>${esc(s.how)}</dd>
+            ${s.gain ? `<dt>Path of Building</dt><dd class="gain">${esc(s.gain)}</dd>` : ""}
+          </dl>
+          ${s.tool || s.source ? `<div class="step-actions">
+            ${s.tool ? `<button class="btn small" data-view="${s.tool}">Open ${esc(TOOL_PAGES[s.tool])}</button>` : ""}
+            ${s.source ? `<button class="link" data-open="${esc(s.source.url)}">${esc(s.source.label)}</button>` : ""}
+          </div>` : ""}
+        </div>
+      </li>`).join("")}
+    </ol>`;
+  const points = (title, list) => `<div class="panel"><div class="panel-head"><h2>${title}</h2></div><div class="panel-body">
+    ${list.map((p) => `<div class="point"><div class="point-title">${esc(p.title)}</div><div class="muted">${esc(p.text)}</div></div>`).join("")}
+  </div></div>`;
+  const how = `<div class="section-head"><h2>How your build works</h2></div>
+    <div class="grid cols-2">${points("Damage", r.damage)}${points("Defence", r.defence)}</div>`;
+  const terms = `<details class="terms"><summary>What the terms mean</summary><dl>${TERMS.map(([t, d]) => `<dt>${t}</dt><dd>${esc(d)}</dd>`).join("")}</dl></details>`;
+  return head + verdict + steps + how + terms;
 }
 
 // The landing page: can the numbers be trusted, the key numbers, what to
@@ -912,7 +1006,7 @@ function delta(label, change) {
 // ---------------------------------------------------------------- events
 
 document.addEventListener("click", async (event) => {
-  const target = event.target.closest("[data-action],[data-view],[data-goal],[data-steps],[data-loss],[data-slot],[data-trade-goal]");
+  const target = event.target.closest("[data-action],[data-view],[data-goal],[data-steps],[data-loss],[data-slot],[data-trade-goal],[data-open]");
   if (!target || target.getAttribute("aria-disabled") === "true") return;
   if (target.dataset.view) {
     state.view = target.dataset.view;
@@ -929,6 +1023,10 @@ document.addEventListener("click", async (event) => {
   }
   if (target.dataset.goal) { state.goal = target.dataset.goal; render(); return; }
   if (target.dataset.slot) { measureSlot(target.dataset.slot); return; }
+  if (target.dataset.open) {
+    invoke("open_link", { url: target.dataset.open }).catch((err) => { state.error = String(err); render(); });
+    return;
+  }
   if (target.dataset.tradeGoal) { state.trade.goal = target.dataset.tradeGoal; tradeChanged(); render(); return; }
   if (target.dataset.steps) { state.steps = Number(target.dataset.steps); render(); return; }
   if (target.dataset.loss) { state.maxLoss = target.dataset.loss === "any" ? null : Number(target.dataset.loss); render(); return; }

@@ -1,6 +1,7 @@
 //! `doctor`: Path of Exile 2 build doctor.
 
 mod check;
+mod coach;
 mod conditions;
 mod diagnose;
 mod fixtures;
@@ -50,6 +51,16 @@ enum Command {
         /// List every stat, not just the summary.
         #[arg(long)]
         all: bool,
+    },
+
+    /// The coach: what the build's numbers mean and what to do, in order.
+    Coach {
+        /// A PoB code, a path to a code or XML file, or a build link.
+        build: String,
+        #[arg(long, default_value = PINNED_POB)]
+        pob: String,
+        #[arg(long)]
+        jobs: Option<usize>,
     },
 
     /// What is wrong with the build, most important first, each fix
@@ -329,6 +340,18 @@ fn run(cli: Cli) -> AnyResult<ExitCode> {
                 return print_json(&analysis::overview(&pool, &xml)?);
             }
             return check::run(&pool, &xml, all);
+        }
+        Command::Coach { build, pob, jobs } => {
+            let pool = pob::Pool::new(&installed(&data, &pob)?, jobs.unwrap_or_else(default_jobs))?;
+            let xml = pob::input::read_build(&build)?;
+            let overview = analysis::overview(&pool, &xml)?;
+            let diagnosis = analysis::diagnose(&pool, &xml)?;
+            let realistic = analysis::realistic(&pool, &xml, &[])?;
+            let brief = analysis::brief(&overview, &diagnosis, Some(&realistic));
+            if cli.json {
+                return print_json(&brief);
+            }
+            return coach::run(&brief);
         }
         Command::Diagnose { build, pob, jobs } => {
             let pool = pob::Pool::new(&installed(&data, &pob)?, jobs.unwrap_or_else(default_jobs))?;
