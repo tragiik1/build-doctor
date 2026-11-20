@@ -53,8 +53,7 @@ input, textarea, button, select { font: inherit; color: inherit; }
   padding: 22px 16px 16px;
   min-height: 0;
 }
-.wordmark { font: 600 15px/1 var(--font-display); letter-spacing: 0.01em; padding: 0 8px; }
-.wordmark span { color: var(--accent); }
+.wordmark { font: 600 15px/1 var(--font-display); letter-spacing: -0.005em; color: var(--text); padding: 0 8px; }
 .build-id { margin: 26px 8px 22px; }
 .build-id .asc { font: 600 17px/1.25 var(--font-display); }
 .build-id .meta { color: var(--text-2); margin-top: 4px; font-size: 12.5px; }
@@ -66,8 +65,8 @@ input, textarea, button, select { font: inherit; color: inherit; }
   color: var(--text-2);
   transition: background 120ms, color 120ms;
 }
-.nav button:hover { background: var(--surface); color: var(--text); }
-.nav button.active { background: var(--surface-2); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
+.nav button:hover { background: rgba(255, 255, 255, 0.025); color: var(--text); }
+.nav button.active { background: var(--surface-3); color: var(--text); }
 .nav button small { color: var(--text-3); font-size: 11.5px; }
 .nav .nav-text { display: flex; flex-direction: column; }
 .nav .hint { color: var(--text-3); font-size: 11.5px; margin-top: 1px; }
@@ -138,8 +137,7 @@ input, textarea, button, select { font: inherit; color: inherit; }
 .levels { margin-bottom: 16px; }
 .levels .intro { margin: 0 0 6px; }
 .level-table td { vertical-align: baseline; }
-.level-table td:nth-child(2) { width: 110px; }
-.level-table td:last-child { width: 90px; }
+.level-table td:last-child, .level-table th:last-child { width: 110px; }
 .level-warning { color: var(--text-3); font-size: 12.5px; margin-top: 2px; }
 
 /* Next steps */

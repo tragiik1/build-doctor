@@ -367,7 +367,7 @@ function renderStart() {
       : `Path of Building ${esc(e.pinned)} is not installed yet.`;
   return `
     <div class="start"><div class="start-card">
-      <div class="wordmark">Build <span>Doctor</span></div>
+      <div class="wordmark">Build Doctor</div>
       <h1>Load a build</h1>
       <p>Paste a Path of Building code, or a pobb.in, poe.ninja, maxroll or poe2db link. You get a diagnosis first: what to fix, each fix measured by Path of Building.</p>
       <p class="faint where">Where to get one: in Path of Building, Import/Export Build, then Generate and Copy. On poe.ninja, open a character and use its Path of Building export.</p>
@@ -408,7 +408,7 @@ function renderRail() {
   ];
   return `
     <aside class="rail">
-      <div class="wordmark">Build <span>Doctor</span></div>
+      <div class="wordmark">Build Doctor</div>
       <div class="build-id">
         <div class="asc">${esc(b.ascendancy ?? b.class)}</div>
         <div class="meta">${b.ascendancy ? esc(b.class) + " · " : ""}Level ${esc(b.level ?? "–")}</div>
@@ -479,7 +479,7 @@ function renderDiagnosisPage() {
       ${tile(full ? "Full DPS" : "Combined DPS", fmt(dmg), o.minionDps ? `Minions ${fmt(o.minionDps)}` : "Main skill")}
       ${tile("Total EHP", fmt(stat("Pools", "TotalEHP")), "Effective hit pool")}
       ${tile("Smallest max hit", smallest ? fmt(smallest.value) : "–", smallest ? `${smallest.label} damage` : "")}
-      ${tile(es && es > (life ?? 0) ? "Energy shield" : "Life", fmt(es && es > (life ?? 0) ? es : life), es && life ? `Life ${fmt(life)} · ES ${fmt(es)}` : "")}
+      ${tile(es && es > (life ?? 0) ? "Energy shield" : "Life", fmt(es && es > (life ?? 0) ? es : life), es && life ? `Life ${fmt(life)} · ES ${fmt(es)}` : es ? "Energy shield only" : "No energy shield")}
     </div>
     ${renderDiagnosis()}
     ${o.warnings.length && state.diagnosis?.status === "error" ? `<div class="verdict warn"><strong>Path of Building warns</strong><span class="muted">${o.warnings.map(esc).join(" · ")}</span></div>` : ""}
@@ -701,9 +701,10 @@ function renderLevels(levels) {
     <div class="panel-head"><h2>One more skill level</h2><span class="meta">each measured by Path of Building</span></div>
     <div class="panel-body">
       <p class="muted intro">What +1 level of each kind of skill does to your damage. It is why gear with “+ to Level of all … Skills” can be worth so much: check such an item under Check an item for its exact value.</p>
-      <table class="data level-table">${levels.map((l) => `
+      <table class="data level-table">
+        <tr><th>Mod</th><th>${esc(levels[0].damage.label)}</th></tr>${levels.map((l) => `
         <tr><td>${esc(l.line)}${l.newWarnings.length ? `<div class="level-warning">Path of Building warns: ${l.newWarnings.map(esc).join(" · ")}</div>` : ""}</td>
-        <td class="muted">${esc(l.damage.label)}</td><td class="${tone(l.damage.change)}">${signed(l.damage.change)}</td></tr>`).join("")}
+        <td class="${tone(l.damage.change)}">${signed(l.damage.change)}</td></tr>`).join("")}
       </table>
     </div>
   </div>`;

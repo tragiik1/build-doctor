@@ -924,7 +924,11 @@ function bd_skill_usage()
 					local entry = out[effect.name] or { main = false, fullDps = false, socketed = false }
 					entry.main = entry.main or index == build.mainSocketGroup
 					entry.fullDps = entry.fullDps or group.includeInFullDPS == true
-					entry.socketed = entry.socketed or not (group.source or gem.fromItem or gem.fromTree)
+					-- An imported character lists item-granted skills (a unique
+					-- wand's spell, say) as ordinary skill groups; PoB's skill data
+					-- still marks them.
+					local granted = group.source or gem.fromItem or gem.fromTree or effect.fromItem or effect.fromTree
+					entry.socketed = entry.socketed or not granted
 					out[effect.name] = entry
 				end
 			end

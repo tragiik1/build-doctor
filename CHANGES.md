@@ -3,6 +3,28 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-20: Cleaner chrome; item-granted skills on imported characters
+
+**From the user (screenshots of 0.1.27):** The Stars Answer still listed;
+dislikes the active menu tab, the two-colour "Build Doctor" wordmark and
+the app icon.
+
+**What changed**
+- An imported character lists item-granted skills as ordinary skill
+  groups, so the cost-warning check missed them. It now also reads PoB's
+  skill data flag (`fromItem`/`fromTree` on the granted effect; The Stars
+  Answer has `fromItem = true`).
+- Menu: no gold edge on the active item; the active page has a solid
+  background, hover only a faint one, so the two are easy to tell apart.
+- Wordmark: one colour, one weight.
+- One more skill level: the damage label is a column header, not repeated
+  on every row.
+- The Life tile always has a sub-line ("No energy shield").
+- Icon: nine original concepts drawn as SVG (plague doctor, rod and
+  serpent, gem cross, vital rune, life flask, stethoscope, tree cross,
+  scalpel and sigil, pulse heart), shown to the user at 176 to 16 px;
+  the chosen one replaces the current icon next.
+
 ## 2026-11-20: Restore check no longer trips on config order (user report)
 
 **Problem (user's Blood Mage, 0.1.26):** the diagnosis stopped with "PoB
