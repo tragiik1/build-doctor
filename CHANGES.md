@@ -3,6 +3,29 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-20: Restore check no longer trips on config order (user report)
+
+**Problem (user's Blood Mage, 0.1.26):** the diagnosis stopped with "PoB
+did not return to the build's original state after a what-if", listing
+config inputs in a different order. PoB saves config inputs in Lua
+hash-table order (`ConfigTab:Save` iterates `pairs(configSet.input)`); a
+Custom Modifiers what-if adds the `customMods` key to a build that had
+none, which can rehash the table and reorder the saved lines for good. No
+value changed. The skill-level checks run many such what-ifs, which made
+it likely; reproduced on 2 of 13 fixtures (NMF0l4yHDix9, OkpIHJAvHQ_R).
+
+**What changed**
+- The restore check's comparison form sorts runs of `<Input>` and
+  `<Placeholder>` lines; every name and value must still match.
+- If the diagnosis ever fails, the app says so in a sentence and that the
+  rest of the app is unaffected, above PoB's message.
+
+**What was tested**
+- Engine test: config lines in a different order compare equal, a changed
+  value does not.
+- All 13 fixtures diagnose without a restore error (the 3 Darkness
+  Enthroned builds are refused as before).
+
 ## 2026-11-20: Advice that matches how the game is played; skill levels; alignment
 
 **From the user (on their own build):** "it's pretty rare to get 75% chaos

@@ -171,7 +171,40 @@ local dirty = false
 -- "…nodes" list, e.g. nodes, intNodes, and in the tree URL that encodes them). The canonical form sorts node lists
 -- and drops tree URLs; everything else, every stat included, must match
 -- character for character.
+--
+-- PoB also writes config inputs in Lua hash-table order (ConfigTab:Save
+-- iterates `pairs(configSet.input)`), and a what-if that adds a key (Custom
+-- Modifiers) can reorder that table for good. Their order means nothing, so
+-- runs of <Input>/<Placeholder> lines are sorted; every name and value must
+-- still match.
+local function sortConfigRuns(xml)
+	local out, run, runKind = { }, { }, nil
+	local function flush()
+		table.sort(run)
+		for _, line in ipairs(run) do
+			out[#out + 1] = line
+		end
+		run, runKind = { }, nil
+	end
+	for line in (xml .. "\n"):gmatch("(.-)\n") do
+		local kind = line:match("^%s*<(Input) ") or line:match("^%s*<(Placeholder) ")
+		if kind then
+			if kind ~= runKind then
+				flush()
+			end
+			runKind = kind
+			run[#run + 1] = line
+		else
+			flush()
+			out[#out + 1] = line
+		end
+	end
+	flush()
+	return table.concat(out, "\n")
+end
+
 local function canonical(xml)
+	xml = sortConfigRuns(xml)
 	xml = xml:gsub('(%a*[Nn]odes)="([%d,]*)"', function(name, list)
 		local ids = { }
 		for id in list:gmatch("%d+") do ids[#ids + 1] = tonumber(id) end
@@ -330,6 +363,11 @@ end
 
 -- Recalculates the original build if a what-if ran since, and checks PoB's
 -- output is byte-identical to the original load.
+-- The comparison form of PoB's saved output (for tests).
+function bd_canonical(xml)
+	return canonical(xml)
+end
+
 function bd_ensure_original()
 	ensureOriginal()
 end

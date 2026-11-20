@@ -678,6 +678,28 @@ mod tests {
         assert!(err.to_string().contains("cannot read"), "{err}");
     }
 
+    /// PoB writes config inputs in hash-table order, which a what-if can
+    /// change; the restore check ignores that order but not the values.
+    #[test]
+    #[ignore = "needs a PoB2 install in DOCTOR_POB_DIR"]
+    fn restore_check_ignores_config_order_only() {
+        let engine = engine();
+        let canonical = |xml: &str| -> String {
+            engine
+                .lua
+                .globals()
+                .get::<mlua::Function>("bd_canonical")
+                .unwrap()
+                .call(xml)
+                .unwrap()
+        };
+        let a = "<Config>\n\t<Input name=\"a\" boolean=\"true\"/>\n\t<Input name=\"b\" number=\"1\"/>\n</Config>";
+        let b = "<Config>\n\t<Input name=\"b\" number=\"1\"/>\n\t<Input name=\"a\" boolean=\"true\"/>\n</Config>";
+        let c = "<Config>\n\t<Input name=\"b\" number=\"2\"/>\n\t<Input name=\"a\" boolean=\"true\"/>\n</Config>";
+        assert_eq!(canonical(a), canonical(b));
+        assert_ne!(canonical(a), canonical(c));
+    }
+
     /// An item as the game copies it: PoB reads it, finds the slots it fits,
     /// equips it with a real effect, and the build is restored afterwards.
     #[test]

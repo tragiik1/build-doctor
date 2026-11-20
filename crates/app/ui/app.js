@@ -679,7 +679,7 @@ function renderDiagnosis() {
     </div></div>`;
   }
   if (d.status === "error") {
-    return `<div class="panel diagnosis">${head("")}<div class="panel-body"><div class="error" style="margin:0">${esc(d.error)}</div></div></div>`;
+    return `<div class="panel diagnosis">${head("")}<div class="panel-body"><p class="muted" style="margin:0 0 10px">The diagnosis could not finish. Your numbers above and the other pages are not affected. Path of Building's warnings are listed below.</p><div class="error" style="margin:0">${esc(d.error)}</div></div></div>`;
   }
   const findings = d.result.findings;
   const count = (severity, one, many) => {
