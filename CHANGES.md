@@ -3,6 +3,64 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-20: Advice that matches how the game is played; skill levels; alignment
+
+**From the user (on their own build):** "it's pretty rare to get 75% chaos
+res … this isn't accurate or good info"; The Stars Answer warning is noise
+("no one actually ever uses this … it comes with the Runic Fork", which is
+valued for other reasons); some UI elements are misaligned; "do your
+research".
+
+**Research (web, 2026-11-20)**
+- Chaos resistance caps at 75% like elemental resistances but is much
+  harder to stack; guides treat it as a secondary target, not a cap to
+  reach. (poe2wiki Chaos resistance; lootlore chaos resistance guide;
+  forum thread "Prevalence of Chaos Damage vs Resistance in the Endgame".)
+- The Stars Answer is a spell the Runic Fork (Runeseeker's Call quest
+  reward) grants, costing 10,000 mana per cast; guides call it not useful
+  in practice. (game8 "The Stars Answer"; poe2wiki Runic Fork.)
+
+**What changed**
+- Chaos resistance: the fix is one chaos resistance mod at a mid roll
+  (PoB's roll data: +4% to +27%, so +16%), not the gap to 75%, with what
+  that mod is worth. Elemental resistances still go to their maximum.
+- Cost warnings ("You do not have enough Mana to use: …") are checked per
+  skill against the build's skill groups (`Engine::skill_usage`): a skill
+  the damage numbers include (main skill or Full DPS) is a problem; a gem
+  the player socketed but the numbers leave out is a note; a skill only an
+  item grants that the build does not use is left out (The Stars Answer).
+  Duplicate names are merged. The same wording is used for warnings an
+  item or an extra skill level adds: only newly affected used skills, as
+  "Not enough Mana to use Spark".
+- **One more skill level** (diagnosis section, CLI and app): +1 of every
+  "+# to Level of all … Skills" mod in PoB's roll data, applied through
+  Custom Modifiers and recalculated: what each does to damage, best first,
+  with any PoB warning it adds (on the Spark Infernalist, +1 level to all
+  skills is +15.7% Full DPS but would make Spark cost more mana than the
+  build has). Losses are shown too.
+- `bd_with_mods` also returns PoB's warnings (`Engine::with_mods_warned`).
+- UI: finding labels sit on the title's baseline; links inherit their
+  line's size; the diagnosis panel is "What to fix" (the page is
+  Diagnosis); skill-level rows align to their first line; item-check
+  changes have separate value and change columns, resistances as
+  "+1 pts"; chips are rounded rectangles so wrapped node text stays tidy;
+  the start page's "where to get a code" sits under the intro.
+
+**Found, not changed**
+- PoB is not consistent about item-granted skills: on the Snap Shaman, a
+  saved build with "+1 to Level of all Skills" in Custom Modifiers loads at
+  −10.8% DPS, while typing the same line into Custom Modifiers (what the
+  app does) changes nothing. The app keeps PoB's typing path, which is what
+  a player would see doing it in PoB.
+
+**What was tested**
+- Unit tests: cost warnings per skill use, new-warning wording, the chaos
+  step. Analysis 16, engine 31/31, `doctor verify` exact on 0.23.1.
+- Spark Infernalist: chaos +12% (gap, under one mod), Frost Bomb etc. as a
+  note, skill levels +15.7% to +0.1%. Thorns Legionnaire: chaos +16% (one
+  mod) instead of +29%.
+- Screenshots of every page after the alignment fixes.
+
 ## 2026-11-20: Gear upgrades, jewels, bug fixes, clarity
 
 **Goal (from user):** build the trade feature (league typed once, no

@@ -7,7 +7,7 @@
 use pob::{Pool, StatSheet};
 use serde::Serialize;
 
-use crate::diagnose::{Effect, damage_effect, measured};
+use crate::diagnose::{Effect, damage_effect, measured, new_warnings};
 use crate::{BuildInfo, Result};
 
 /// Stats shown when they change, after damage, Total EHP and the smallest
@@ -77,10 +77,11 @@ pub fn item_check(pool: &Pool, xml: &str, item: &str) -> Result<ItemCheck> {
             engine.identity()?,
             engine.item_info(&raw)?,
             engine.warnings()?,
+            engine.skill_usage()?,
             engine.ensure_original()?,
         ))
     })?;
-    let (id, info, warnings, saved) = found.pop().expect("one item in, one out");
+    let (id, info, warnings, skills, saved) = found.pop().expect("one item in, one out");
     let base = StatSheet::from_build_xml(&saved)?;
 
     let raw = item.clone();
@@ -116,10 +117,7 @@ pub fn item_check(pool: &Pool, xml: &str, item: &str) -> Result<ItemCheck> {
                 replaces: slot.current.clone(),
                 verdict: verdict(&headline),
                 changes: measured(&shown, &base, &calc.stats),
-                new_warnings: after_warnings
-                    .into_iter()
-                    .filter(|w| !warnings.contains(w))
-                    .collect(),
+                new_warnings: new_warnings(&warnings, &after_warnings, &skills),
                 headline,
             }
         })

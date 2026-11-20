@@ -15,7 +15,6 @@ pub fn run(pool: &Pool, xml: &str) -> AnyResult<ExitCode> {
     println!();
     if d.findings.is_empty() {
         println!("Nothing to fix: PoB finds no problems and no measurable gains.");
-        return Ok(ExitCode::SUCCESS);
     }
     for f in &d.findings {
         let tag = match f.severity {
@@ -45,6 +44,20 @@ pub fn run(pool: &Pool, xml: &str) -> AnyResult<ExitCode> {
             println!("{:<8} {detail}", "");
         }
         println!();
+    }
+    if !d.levels.is_empty() {
+        println!("One more skill level:");
+        for l in &d.levels {
+            println!(
+                "  {:<44} {} {}",
+                l.line,
+                l.damage.label,
+                signed(l.damage.change)
+            );
+            for w in &l.new_warnings {
+                println!("  {:<44} PoB warns: {w}", "");
+            }
+        }
     }
     Ok(ExitCode::SUCCESS)
 }

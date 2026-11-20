@@ -338,6 +338,16 @@ function bd_loaded_xml()
 	return loadedXml
 end
 
+-- PoB's own warnings for the current calculation (unmet attribute
+-- requirements, negative Spirit, too many points, …), as its sidebar shows.
+local function currentWarnings()
+	local out = { }
+	for _, line in ipairs(build.controls.warnings and build.controls.warnings.lines or { }) do
+		out[#out + 1] = StripEscapes(tostring(line))
+	end
+	return out
+end
+
 -- Numbers from PoB's main output table (the player's calculation, main
 -- skill included), including the ones PoB does not save, such as
 -- MissingFireResist. Booleans read as 1 or 0; keys PoB did not set are left
@@ -407,12 +417,12 @@ local function withCustomMods(lines, calculate)
 	return unpack(results, 2, results.n)
 end
 
--- The build with extra modifier lines: PoB's settled output plus the
--- requested output values.
+-- The build with extra modifier lines: PoB's settled output, the requested
+-- output values and PoB's warnings.
 function bd_with_mods(lines, keys)
 	return withCustomMods(lines, function()
 		local xml, passes = bd_settle()
-		return xml, passes, xml and outputValues(keys)
+		return xml, passes, xml and outputValues(keys), xml and currentWarnings()
 	end)
 end
 
@@ -430,16 +440,6 @@ end
 ---------------------------------------------------------------------------
 -- Passive tree
 ---------------------------------------------------------------------------
-
--- PoB's own warnings for the current calculation (unmet attribute
--- requirements, negative Spirit, too many points, …), as its sidebar shows.
-local function currentWarnings()
-	local out = { }
-	for _, line in ipairs(build.controls.warnings and build.controls.warnings.lines or { }) do
-		out[#out + 1] = StripEscapes(tostring(line))
-	end
-	return out
-end
 
 function bd_warnings()
 	ensureOriginal()
@@ -866,6 +866,74 @@ function bd_stat_values(slotName, part, parts)
 		end
 	end
 	return { current = summarise(baseOutput), blank = summarise(blankOutput), stats = stats }
+end
+
+---------------------------------------------------------------------------
+-- Skills and roll data for the diagnosis
+---------------------------------------------------------------------------
+
+-- Every active skill in the build's enabled skill groups, by name: whether
+-- it is in the main skill group, counted in Full DPS, or socketed by the
+-- player (not only granted by an item or the tree).
+function bd_skill_usage()
+	ensureOriginal()
+	local out = { }
+	for index, group in ipairs(build.skillsTab.socketGroupList) do
+		if group.enabled ~= false then
+			for _, gem in ipairs(group.gemList or { }) do
+				local effect = gem.grantedEffect or (gem.gemData and gem.gemData.grantedEffect)
+				if effect and effect.name and not effect.support then
+					local entry = out[effect.name] or { main = false, fullDps = false, socketed = false }
+					entry.main = entry.main or index == build.mainSocketGroup
+					entry.fullDps = entry.fullDps or group.includeInFullDPS == true
+					entry.socketed = entry.socketed or not (group.source or gem.fromItem or gem.fromTree)
+					out[effect.name] = entry
+				end
+			end
+		end
+	end
+	return out
+end
+
+-- The highest and lowest explicit roll PoB's trade data has for a stat text
+-- in any item category, with the category of the highest.
+function bd_roll_range(text)
+	queryMods = queryMods or LoadModule("Data/QueryMods.lua")
+	local low, high, where
+	for _, entry in pairs(queryMods.Explicit or { }) do
+		if entry.tradeMod and entry.tradeMod.text == text then
+			for category, range in pairs(entry) do
+				if type(range) == "table" and range.min and range.max then
+					if not high or range.max > high then
+						high, where = range.max, category
+					end
+					low = math.min(low or range.min, range.min)
+				end
+			end
+		end
+	end
+	return low, high, where
+end
+
+-- "+1 to Level of all … Skills" lines for every such mod in PoB's trade
+-- data, sorted.
+function bd_level_lines()
+	queryMods = queryMods or LoadModule("Data/QueryMods.lua")
+	local seen, out = { }, { }
+	for _, group in pairs(queryMods) do
+		for _, entry in pairs(group) do
+			local text = type(entry) == "table" and entry.tradeMod and entry.tradeMod.text
+			if text and text:find("^# to Level of all ") and (text:find("Skills$") or text:find("Skill Gems$")) then
+				local line = text:gsub("^#", "+1")
+				if not seen[line] then
+					seen[line] = true
+					out[#out + 1] = line
+				end
+			end
+		end
+	end
+	table.sort(out)
+	return out
 end
 
 function bd_take_log()

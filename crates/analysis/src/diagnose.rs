@@ -8,7 +8,9 @@
 //! reported without a gain, and a fix that changes none of PoB's numbers is
 //! not reported.
 
-use pob::{Outputs, Pool, StatKind, StatSheet};
+use std::collections::HashMap;
+
+use pob::{Outputs, Pool, SkillUse, StatKind, StatSheet};
 use serde::Serialize;
 
 use crate::{BuildInfo, Result, pct};
@@ -70,16 +72,34 @@ impl Effect {
 pub struct Diagnosis {
     pub build: BuildInfo,
     pub findings: Vec<Finding>,
+    /// What one more level of each kind of skill does to the build's
+    /// damage, best first; only kinds that change it.
+    pub levels: Vec<LevelWorth>,
+}
+
+/// "+1 to Level of all Spell Skills" and what PoB says it does.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LevelWorth {
+    pub line: String,
+    pub damage: Effect,
+    /// PoB warnings the extra level adds (a gem's attribute requirement
+    /// the build no longer meets, say), which explain a loss.
+    pub new_warnings: Vec<String>,
 }
 
 /// One PoB recalculation (or search) to run in the pool.
 enum Job {
-    /// Raise a resistance to its maximum.
+    /// Raise a resistance by `raise` (at most `missing`, the gap to its
+    /// maximum).
     Resist {
         element: &'static str,
         now: f64,
         missing: f64,
+        raise: f64,
     },
+    /// One more level of a kind of skill.
+    Level(String),
     /// The build without its resistance-penalty setting (PoB's default is
     /// the endgame penalty).
     Penalty,
@@ -93,8 +113,14 @@ enum Outcome {
         element: &'static str,
         now: f64,
         missing: f64,
+        raise: f64,
         reached: bool,
         stats: StatSheet,
+    },
+    Level {
+        line: String,
+        stats: StatSheet,
+        warnings: Vec<String>,
     },
     Penalty(StatSheet),
     Accuracy {
@@ -139,6 +165,9 @@ pub fn diagnose(pool: &Pool, xml: &str) -> Result<Diagnosis> {
             unsupported: engine.unsupported_mods()?.len(),
             out: engine.outputs(&keys)?,
             cheapest_spirit: engine.cheapest_spirit()?,
+            skills: engine.skill_usage()?,
+            chaos_roll: engine.roll_range("#% to Chaos Resistance")?,
+            level_lines: engine.level_lines()?,
             saved: engine.ensure_original()?,
         })
     })?;
@@ -161,9 +190,11 @@ pub fn diagnose(pool: &Pool, xml: &str) -> Result<Diagnosis> {
                 element,
                 now: value(&format!("{element}Resist")).unwrap_or(0.0),
                 missing,
+                raise: resist_step(element, missing, read.chaos_roll.as_ref()),
             });
         }
     }
+    jobs.extend(read.level_lines.iter().cloned().map(Job::Level));
     let misses = value("AccuracyHitChance").is_some_and(|h| h < 100.0);
     if misses {
         // The first round of the accuracy search: doubling steps.
@@ -178,15 +209,25 @@ pub fn diagnose(pool: &Pool, xml: &str) -> Result<Diagnosis> {
             element,
             now,
             missing,
+            raise,
         } => {
             let key = format!("{element}Resist");
-            let (calc, after) = engine.with_mods(&[&resist_line(element, missing)], &[&key])?;
+            let (calc, after) = engine.with_mods(&[&resist_line(element, raise)], &[&key])?;
             Ok(Outcome::Resist {
                 element,
                 now,
                 missing,
-                reached: after.get(&key).is_some_and(|v| *v >= now + missing),
+                raise,
+                reached: after.get(&key).is_some_and(|v| *v >= now + raise),
                 stats: calc.stats,
+            })
+        }
+        Job::Level(line) => {
+            let (calc, _, warnings) = engine.with_mods_warned(&[&line], &[])?;
+            Ok(Outcome::Level {
+                line,
+                stats: calc.stats,
+                warnings,
             })
         }
         Job::Penalty => Ok(Outcome::Penalty(
@@ -196,17 +237,46 @@ pub fn diagnose(pool: &Pool, xml: &str) -> Result<Diagnosis> {
     })?;
 
     let mut findings: Vec<Finding> = Vec::new();
+    let mut levels: Vec<LevelWorth> = Vec::new();
     let mut search = AccuracySearch::default();
     for outcome in outcomes {
         findings.extend(match outcome {
+            Outcome::Level {
+                line,
+                stats,
+                warnings,
+            } => {
+                let (label, before, after) = damage_effect(&base, &stats);
+                let damage = Effect::new(label, before, after);
+                if before.is_finite() && after.is_finite() && damage.change.abs() >= 0.05 {
+                    levels.push(LevelWorth {
+                        line,
+                        damage,
+                        new_warnings: new_warnings(&read.warnings, &warnings, &read.skills),
+                    });
+                }
+                None
+            }
             Outcome::Penalty(stats) => penalty(&read.assumptions, &base, &stats),
             Outcome::Resist {
                 element,
                 now,
                 missing,
+                raise,
                 reached,
                 stats,
-            } => resist(element, now, missing, reached, &base, &stats),
+            } => resist(
+                Raise {
+                    element,
+                    now,
+                    missing,
+                    raise,
+                    reached,
+                },
+                read.chaos_roll.as_ref(),
+                &base,
+                &stats,
+            ),
             Outcome::Accuracy { added, hits } => {
                 search.record(added, hits);
                 None
@@ -217,7 +287,11 @@ pub fn diagnose(pool: &Pool, xml: &str) -> Result<Diagnosis> {
         let answer = finish_accuracy(pool, xml, &base, search)?;
         findings.push(accuracy(out, &base, answer));
     }
-    findings.extend(read.warnings.into_iter().map(warning));
+    findings.extend(
+        read.warnings
+            .into_iter()
+            .filter_map(|w| warning(w, &read.skills)),
+    );
     findings.extend(over_cap(out));
     findings.extend(spirit(out, read.cheapest_spirit));
     if read.unsupported > 0 {
@@ -231,10 +305,17 @@ pub fn diagnose(pool: &Pool, xml: &str) -> Result<Diagnosis> {
         ));
     }
     rank(&mut findings);
+    levels.sort_by(|a, b| {
+        b.damage
+            .change
+            .total_cmp(&a.damage.change)
+            .then_with(|| a.line.cmp(&b.line))
+    });
 
     Ok(Diagnosis {
         build: BuildInfo::new(&read.id, &pool.install().version().to_string()),
         findings,
+        levels,
     })
 }
 
@@ -246,6 +327,11 @@ struct Read {
     unsupported: usize,
     out: Outputs,
     cheapest_spirit: Option<f64>,
+    skills: HashMap<String, SkillUse>,
+    /// Lowest and highest explicit chaos resistance roll, and the category
+    /// with the highest.
+    chaos_roll: Option<(f64, f64, String)>,
+    level_lines: Vec<String>,
     saved: String,
 }
 
@@ -295,22 +381,44 @@ fn resist_line(element: &str, missing: f64) -> String {
     format!("+{}% to {element} Resistance", missing.ceil())
 }
 
-/// A resistance below its maximum. Nothing when raising it changes none of
-/// PoB's numbers (an immunity, for example).
-fn resist(
-    element: &str,
+/// The middle of the best explicit chaos resistance roll in PoB's data:
+/// one mod's worth. Few mods roll chaos resistance, so "raise it to the
+/// maximum" is rarely within reach; one more mod is.
+fn resist_step(element: &str, missing: f64, chaos_roll: Option<&(f64, f64, String)>) -> f64 {
+    match (element, chaos_roll) {
+        ("Chaos", Some((low, high, _))) => missing.min(((high - low) * 0.5 + low).ceil()),
+        _ => missing,
+    }
+}
+
+/// A resistance raise measured by PoB.
+struct Raise<'a> {
+    element: &'a str,
     now: f64,
+    /// Gap to the maximum.
     missing: f64,
+    /// What was added.
+    raise: f64,
+    /// Whether the resistance went up by `raise`.
     reached: bool,
+}
+
+/// A resistance below its maximum. Elemental resistances are raised to the
+/// maximum; chaos resistance by one mod at a mid roll. Nothing when the
+/// raise changes none of PoB's numbers (an immunity, for example).
+fn resist(
+    r: Raise<'_>,
+    chaos_roll: Option<&(f64, f64, String)>,
     base: &StatSheet,
     fixed: &StatSheet,
 ) -> Option<Finding> {
+    let element = r.element;
     let title = format!(
         "{element} resistance {}%, maximum {}%",
-        fmt(now),
-        fmt(now + missing)
+        fmt(r.now),
+        fmt(r.now + r.missing)
     );
-    if !reached {
+    if !r.reached {
         return Some(note(
             title,
             format!(
@@ -329,11 +437,19 @@ fn resist(
         base,
         fixed,
     );
+    let detail = match (element, chaos_roll) {
+        ("Chaos", Some((low, high, _))) if r.raise < r.missing => Some(format!(
+            "One chaos resistance mod at a mid roll (they roll +{}% to +{}% in PoB's data). Few mods roll chaos resistance, so the maximum is rarely within reach; this is what the next mod is worth.",
+            fmt(*low),
+            fmt(*high)
+        )),
+        _ => None,
+    };
     (!effects.is_empty()).then(|| Finding {
         severity: Severity::Gain,
         title,
-        detail: None,
-        fix: Some(resist_line(element, missing)),
+        detail,
+        fix: Some(resist_line(element, r.raise)),
         effects,
     })
 }
@@ -364,14 +480,110 @@ fn penalty(
     })
 }
 
-/// A PoB warning. Spare weapon-set points are worth knowing; everything
-/// else PoB warns about is something the game would not allow, so the
-/// numbers include something the character cannot have.
-fn warning(text: String) -> Finding {
-    if text.contains("passives available") {
-        return note(text, "Unspent points on the second weapon set.".into());
+/// PoB warnings in `after` that are not in `before`, worded for the user.
+/// For cost warnings ("You do not have enough Mana to use: A, B") only the
+/// skills newly listed count, and only those the damage numbers include
+/// (see [`warning`]): "Not enough Mana to use B".
+pub(crate) fn new_warnings(
+    before: &[String],
+    after: &[String],
+    skills: &HashMap<String, SkillUse>,
+) -> Vec<String> {
+    let listed = |need: &str, lines: &[String]| -> Vec<String> {
+        lines
+            .iter()
+            .filter_map(|l| l.split_once(" to use: "))
+            .filter(|(n, _)| *n == need)
+            .flat_map(|(_, list)| list.split(", ").map(str::to_owned))
+            .collect()
+    };
+    let mut out = Vec::new();
+    for line in after {
+        if before.contains(line) {
+            continue;
+        }
+        let Some((need, list)) = line.split_once(" to use: ") else {
+            out.push(line.clone());
+            continue;
+        };
+        let had = listed(need, before);
+        let mut fresh: Vec<&str> = Vec::new();
+        for name in list.split(", ") {
+            let used = skills.get(name).is_none_or(|u| u.main || u.full_dps);
+            if used && !had.iter().any(|h| h == name) && !fresh.contains(&name) {
+                fresh.push(name);
+            }
+        }
+        if !fresh.is_empty() {
+            out.push(format!(
+                "{} to use {}",
+                need.replace("You do not have enough", "Not enough"),
+                fresh.join(", ")
+            ));
+        }
     }
-    Finding {
+    out
+}
+
+/// A PoB warning, or nothing when it does not concern this build.
+///
+/// "You do not have enough Mana to use: A, B" matters for a skill the
+/// damage numbers include (the main skill, or one counted in Full DPS). A
+/// gem the player socketed but the numbers leave out only gets a note, and a
+/// skill an item grants that the build does not use (a unique weapon's
+/// expensive spell, say) is left out. Spare weapon-set points are a note.
+/// Everything else PoB warns about is something the game would not allow.
+fn warning(text: String, skills: &HashMap<String, SkillUse>) -> Option<Finding> {
+    if text.contains("passives available") {
+        return Some(note(
+            text,
+            "Unspent points on the second weapon set.".into(),
+        ));
+    }
+    if let Some((need, list)) = text.split_once(" to use: ") {
+        let mut names: Vec<&str> = Vec::new();
+        for name in list.split(", ") {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        // A name PoB lists but the skill groups do not (should not happen)
+        // counts as used: better a warning too many than one missing.
+        let used = |n: &&str| skills.get(*n).is_none_or(|u| u.main || u.full_dps);
+        let socketed = |n: &&str| skills.get(*n).is_some_and(|u| u.socketed);
+        let counted: Vec<&str> = names.iter().copied().filter(|n| used(n)).collect();
+        let left_out: Vec<&str> = names
+            .iter()
+            .copied()
+            .filter(|n| !used(n) && socketed(n))
+            .collect();
+        let need = need.replace("You do not have enough", "Not enough");
+        if !counted.is_empty() {
+            return Some(Finding {
+                severity: Severity::Problem,
+                title: format!("{need} to use {}", counted.join(", ")),
+                detail: Some(
+                    "Your damage numbers include it, but in game its cost is more than you have, so you could not use it."
+                        .into(),
+                ),
+                fix: None,
+                effects: Vec::new(),
+            });
+        }
+        if !left_out.is_empty() {
+            let detail = if left_out.len() == 1 {
+                "It is not part of your damage numbers, but in game you could not use it."
+            } else {
+                "They are not part of your damage numbers, but in game you could not use them."
+            };
+            return Some(note(
+                format!("{need} to use {}", left_out.join(", ")),
+                detail.into(),
+            ));
+        }
+        return None;
+    }
+    Some(Finding {
         severity: Severity::Problem,
         title: text,
         detail: Some(
@@ -380,7 +592,7 @@ fn warning(text: String) -> Finding {
         ),
         fix: None,
         effects: Vec::new(),
-    }
+    })
 }
 
 fn accuracy_line(added: u32) -> String {
@@ -635,10 +847,80 @@ mod tests {
 
     #[test]
     fn spare_weapon_set_points_are_a_note() {
-        let spare = warning("You have 7 Weapon set 2 passives available".into());
+        let none = HashMap::new();
+        let spare = warning("You have 7 Weapon set 2 passives available".into(), &none).unwrap();
         assert_eq!(spare.severity, Severity::Note);
-        let spirit = warning("Your unreserved Spirit is negative".into());
+        let spirit = warning("Your unreserved Spirit is negative".into(), &none).unwrap();
         assert_eq!(spirit.severity, Severity::Problem);
+    }
+
+    #[test]
+    fn cost_warnings_only_for_skills_the_build_uses() {
+        let skill = |main, full_dps, socketed| SkillUse {
+            main,
+            full_dps,
+            socketed,
+        };
+        let skills: HashMap<String, SkillUse> = [
+            ("Spark".to_owned(), skill(true, false, true)),
+            ("The Stars Answer".to_owned(), skill(false, false, false)),
+            ("Frost Bomb".to_owned(), skill(false, false, true)),
+        ]
+        .into();
+        let item_only = "You do not have enough Mana to use: The Stars Answer, The Stars Answer";
+        assert!(warning(item_only.into(), &skills).is_none());
+
+        let main = warning(
+            "You do not have enough Life to use: Spark, The Stars Answer".into(),
+            &skills,
+        )
+        .unwrap();
+        assert_eq!(main.severity, Severity::Problem);
+        assert_eq!(main.title, "Not enough Life to use Spark");
+
+        let utility = warning(
+            "You do not have enough Mana to use: Frost Bomb".into(),
+            &skills,
+        )
+        .unwrap();
+        assert_eq!(utility.severity, Severity::Note);
+    }
+
+    #[test]
+    fn new_warnings_name_only_newly_affected_used_skills() {
+        let skills: HashMap<String, SkillUse> = [
+            (
+                "Spark".to_owned(),
+                SkillUse {
+                    main: true,
+                    full_dps: true,
+                    socketed: true,
+                },
+            ),
+            ("Frost Bomb".to_owned(), SkillUse::default()),
+        ]
+        .into();
+        let before = vec!["You do not have enough Mana to use: Frost Bomb".to_owned()];
+        let after = vec![
+            "You do not have enough Mana to use: Spark, Frost Bomb".to_owned(),
+            "You do not meet the Strength requirement of Spark".to_owned(),
+        ];
+        assert_eq!(
+            new_warnings(&before, &after, &skills),
+            [
+                "Not enough Mana to use Spark",
+                "You do not meet the Strength requirement of Spark"
+            ]
+        );
+        assert!(new_warnings(&before, &before, &skills).is_empty());
+    }
+
+    #[test]
+    fn chaos_resistance_is_raised_by_one_mod() {
+        let roll = (4.0, 27.0, "Ring".to_owned());
+        assert_eq!(resist_step("Chaos", 37.0, Some(&roll)), 16.0);
+        assert_eq!(resist_step("Chaos", 5.0, Some(&roll)), 5.0);
+        assert_eq!(resist_step("Lightning", 49.0, Some(&roll)), 49.0);
     }
 
     #[test]

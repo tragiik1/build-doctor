@@ -49,6 +49,12 @@ function signed(change) {
   return (change > 0 ? "+" : "−") + Math.abs(change).toFixed(1) + "%";
 }
 
+// A change in percentage points ("+3 pts"), for values that are percentages.
+function pointChange(points) {
+  if (Math.abs(points) < 0.05) return "0";
+  return `${points > 0 ? "+" : "−"}${fmt(Math.abs(points))} pts`;
+}
+
 function tone(change) {
   return Math.abs(change) < 0.05 ? "faint" : change > 0 ? "pos" : "neg";
 }
@@ -364,6 +370,7 @@ function renderStart() {
       <div class="wordmark">Build <span>Doctor</span></div>
       <h1>Load a build</h1>
       <p>Paste a Path of Building code, or a pobb.in, poe.ninja, maxroll or poe2db link. You get a diagnosis first: what to fix, each fix measured by Path of Building.</p>
+      <p class="faint where">Where to get one: in Path of Building, Import/Export Build, then Generate and Copy. On poe.ninja, open a character and use its Path of Building export.</p>
       <textarea class="paste" id="paste" spellcheck="false" placeholder="Paste here" ${state.busy || !ready ? "disabled" : ""}></textarea>
       <div class="start-actions">
         <span class="engine-line">${engineLine}${state.app ? ` · ${versionLabel()}` : ""}</span>
@@ -371,7 +378,6 @@ function renderStart() {
           ? `<button class="btn primary" data-action="load" ${state.busy ? 'aria-disabled="true"' : ""}>Analyse build</button>`
           : `<button class="btn primary" data-action="install" ${state.busy || !e ? 'aria-disabled="true"' : ""}>Install Path of Building</button>`}
       </div>
-      <p class="faint where">Where to get one: in Path of Building, Import/Export Build, then Generate and Copy. On poe.ninja, open a character and use its Path of Building export.</p>
       ${state.busy ? renderBusy() : ""}
       ${state.error ? `<div class="error">${esc(state.error)}</div>` : ""}
       ${state.update ? `<div style="margin-top:18px">${renderUpdate()}</div>` : ""}
@@ -655,7 +661,7 @@ function renderItem() {
       <div class="panel-body">
         <div class="tiles three">${s.headline.map((e) => `<div class="tile"><div class="label">${esc(e.label)}</div><div class="value">${fmt(e.after)}</div><div class="sub ${tone(e.change)}">${signed(e.change)} <span class="faint">from ${fmt(e.before)}</span></div></div>`).join("")}</div>
         ${s.newWarnings.length ? `<div class="item-warnings">${s.newWarnings.map((w) => `<div><span class="neg">Path of Building warns</span> ${esc(w)}</div>`).join("")}</div>` : ""}
-        ${s.changes.length ? `<table class="kv changes">${s.changes.map((e) => `<tr><td class="muted">${esc(e.label)}</td><td>${e.percent ? `${fmt(e.before)}% → ${fmt(e.after)}%` : `${fmt(e.before)} → ${fmt(e.after)} <span class="${tone(e.change)}">${signed(e.change)}</span>`}</td></tr>`).join("")}</table>` : ""}
+        ${s.changes.length ? `<table class="kv changes">${s.changes.map((e) => `<tr><td class="muted">${esc(e.label)}</td><td>${e.percent ? `${fmt(e.before)}% → ${fmt(e.after)}%` : `${fmt(e.before)} → ${fmt(e.after)}`}</td><td class="change ${e.percent ? tone(e.after - e.before) : tone(e.change)}">${e.percent ? pointChange(e.after - e.before) : signed(e.change)}</td></tr>`).join("")}</table>` : ""}
       </div>
     </div>`;
   }).join("");
@@ -665,7 +671,7 @@ function renderItem() {
 function renderDiagnosis() {
   const d = state.diagnosis;
   if (!d) return "";
-  const head = (meta) => `<div class="panel-head"><h2>Diagnosis</h2><span class="meta">${meta}</span></div>`;
+  const head = (meta) => `<div class="panel-head"><h2>What to fix</h2><span class="meta">${meta}</span></div>`;
   if (d.status === "running") {
     return `<div class="panel diagnosis">${head("checking")}<div class="panel-body">
       <div class="muted">Path of Building is testing resistances, accuracy and its own warnings, recalculating the build in full for each fix.</div>
@@ -685,7 +691,22 @@ function renderDiagnosis() {
     ${findings.length
       ? `<ol class="findings">${findings.map(finding).join("")}</ol>`
       : `<div class="muted">Nothing to fix. Path of Building finds no problems and no measurable gains.</div>`}
-  </div></div>`;
+  </div></div>${renderLevels(d.result.levels)}`;
+}
+
+// What one more level of each kind of skill does to the build's damage.
+function renderLevels(levels) {
+  if (!levels.length) return "";
+  return `<div class="panel levels">
+    <div class="panel-head"><h2>One more skill level</h2><span class="meta">each measured by Path of Building</span></div>
+    <div class="panel-body">
+      <p class="muted intro">What +1 level of each kind of skill does to your damage. It is why gear with “+ to Level of all … Skills” can be worth so much: check such an item under Check an item for its exact value.</p>
+      <table class="data level-table">${levels.map((l) => `
+        <tr><td>${esc(l.line)}${l.newWarnings.length ? `<div class="level-warning">Path of Building warns: ${l.newWarnings.map(esc).join(" · ")}</div>` : ""}</td>
+        <td class="muted">${esc(l.damage.label)}</td><td class="${tone(l.damage.change)}">${signed(l.damage.change)}</td></tr>`).join("")}
+      </table>
+    </div>
+  </div>`;
 }
 
 function finding(f) {

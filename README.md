@@ -17,10 +17,12 @@ swaps itself in place. Windows 11 already has the WebView2 runtime it uses. On f
 start it offers to install Path of Building (one download, ~390 MB, every
 file verified). Then paste a PoB code or link:
 
-- **Diagnosis** (the first page): what to fix first. Resistances below their maximum and
-  hit chance below 100%, each with the exact amount needed and what PoB
-  says it changes; a resistance penalty that is not the endgame one; PoB's
-  own warnings.
+- **Diagnosis** (the first page): what to fix first. Elemental resistances
+  below their maximum, chaos resistance one mod at a time, hit chance below
+  100%, each with the amount needed and what PoB says it changes; a
+  resistance penalty that is not the endgame one; PoB's warnings that
+  concern skills you use; and what one more skill level of each kind is
+  worth.
 - **Gear upgrades**: pick a slot; PoB measures what every stat that can
   roll there is worth to your build, then opens a trade search that lists
   items for sale best first. Type your league once; the app itself makes no

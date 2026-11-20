@@ -80,6 +80,17 @@ pub enum AssumptionKind {
     Scenario,
 }
 
+/// How a build uses an active skill.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SkillUse {
+    /// In the main skill group.
+    pub main: bool,
+    /// Counted in Full DPS.
+    pub full_dps: bool,
+    /// Socketed by the player, not only granted by an item or the tree.
+    pub socketed: bool,
+}
+
 /// Numbers from PoB's output table, by PoB's key.
 pub type Outputs = BTreeMap<String, f64>;
 
@@ -189,6 +200,53 @@ impl Engine {
         read_outputs(values)
     }
 
+    /// Every active skill in the build's enabled skill groups, by name.
+    pub fn skill_usage(&self) -> Result<std::collections::HashMap<String, SkillUse>> {
+        let table: Table = self
+            .lua
+            .globals()
+            .get::<mlua::Function>("bd_skill_usage")?
+            .call(())
+            .map_err(|err| self.pob_error(&err))?;
+        table
+            .pairs::<String, Table>()
+            .map(|pair| {
+                let (name, t) = pair?;
+                Ok((
+                    name,
+                    SkillUse {
+                        main: t.get("main")?,
+                        full_dps: t.get("fullDps")?,
+                        socketed: t.get("socketed")?,
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    /// The lowest and highest explicit roll of a stat (its trade text, such
+    /// as "#% to Chaos Resistance") in PoB's roll data, and the item
+    /// category with the highest.
+    pub fn roll_range(&self, text: &str) -> Result<Option<(f64, f64, String)>> {
+        let (low, high, category): (Option<f64>, Option<f64>, Option<String>) = self
+            .lua
+            .globals()
+            .get::<mlua::Function>("bd_roll_range")?
+            .call(text)
+            .map_err(|err| self.pob_error(&err))?;
+        Ok(low.zip(high).zip(category).map(|((l, h), c)| (l, h, c)))
+    }
+
+    /// "+1 to Level of all … Skills" lines for every such mod in PoB's roll
+    /// data.
+    pub fn level_lines(&self) -> Result<Vec<String>> {
+        self.lua
+            .globals()
+            .get::<mlua::Function>("bd_level_lines")?
+            .call(())
+            .map_err(|err| self.pob_error(&err))
+    }
+
     /// The least Spirit any skill or support in PoB's data reserves.
     pub fn cheapest_spirit(&self) -> Result<Option<f64>> {
         Ok(self
@@ -203,9 +261,22 @@ impl Engine {
     /// the requested outputs. A line PoB cannot read completely is an error.
     /// The build is restored afterwards, as with [`Engine::without_config`].
     pub fn with_mods(&self, lines: &[&str], keys: &[&str]) -> Result<(Calculation, Outputs)> {
+        self.with_mods_warned(lines, keys)
+            .map(|(calc, outputs, _)| (calc, outputs))
+    }
+
+    /// [`Engine::with_mods`], plus PoB's warnings for the result.
+    pub fn with_mods_warned(
+        &self,
+        lines: &[&str],
+        keys: &[&str],
+    ) -> Result<(Calculation, Outputs, Vec<String>)> {
         let with: mlua::Function = self.lua.globals().get("bd_with_mods")?;
-        let (saved, passes, values) = with
-            .call::<(Option<String>, u32, Option<Table>)>((lines.to_vec(), keys.to_vec()))
+        let (saved, passes, values, warnings) = with
+            .call::<(Option<String>, u32, Option<Table>, Option<Vec<String>>)>((
+                lines.to_vec(),
+                keys.to_vec(),
+            ))
             .map_err(|err| self.pob_error(&err))?;
         let (Some(xml), Some(values)) = (saved, values) else {
             return Err(Error::Unsettled {
@@ -214,7 +285,11 @@ impl Engine {
             });
         };
         let stats = StatSheet::from_build_xml(&xml)?;
-        Ok((Calculation { xml, stats, passes }, read_outputs(values)?))
+        Ok((
+            Calculation { xml, stats, passes },
+            read_outputs(values)?,
+            warnings.unwrap_or_default(),
+        ))
     }
 
     /// Puts PoB back on the loaded build after what-ifs (recalculating it) and

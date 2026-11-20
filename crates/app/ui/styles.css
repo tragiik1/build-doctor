@@ -118,9 +118,10 @@ input, textarea, button, select { font: inherit; color: inherit; }
 /* Diagnosis */
 .diagnosis { margin-bottom: 16px; }
 .findings { list-style: none; margin: 0; padding: 0; }
-.finding { display: grid; grid-template-columns: 64px 1fr; gap: 14px; padding: 12px 0; border-top: 1px solid var(--border); }
+.finding { display: grid; grid-template-columns: 64px 1fr; gap: 14px; align-items: baseline; padding: 12px 0; border-top: 1px solid var(--border); }
 .finding:first-child { border-top: 0; padding-top: 2px; }
-.finding .tag { font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase; font-weight: 600; padding-top: 2px; }
+.finding .tag { font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase; font-weight: 600; }
+.finding .link { font-size: inherit; }
 .finding.is-problem .tag { color: var(--neg); }
 .finding.is-gain .tag { color: var(--pos); }
 .finding.is-note .tag { color: var(--text-3); }
@@ -132,6 +133,14 @@ input, textarea, button, select { font: inherit; color: inherit; }
 .finding .detail { margin-top: 3px; color: var(--text-3); font-size: 12.5px; }
 
 .finding .fix .sep { color: var(--text-3); margin: 0 6px; }
+
+/* Skill levels */
+.levels { margin-bottom: 16px; }
+.levels .intro { margin: 0 0 6px; }
+.level-table td { vertical-align: baseline; }
+.level-table td:nth-child(2) { width: 110px; }
+.level-table td:last-child { width: 90px; }
+.level-warning { color: var(--text-3); font-size: 12.5px; margin-top: 2px; }
 
 /* Next steps */
 .next { margin-top: 16px; }
@@ -151,8 +160,10 @@ textarea.paste.item-paste { height: 180px; background: var(--surface-2); }
 .verdict-word.warn { color: var(--warn); }
 .item-warnings { margin: 10px 0 2px; display: flex; flex-direction: column; gap: 4px; }
 .changes { margin-top: 8px; }
+.changes td:nth-child(2) { text-align: right; font-variant-numeric: tabular-nums; }
+.changes td.change { width: 84px; text-align: right; padding-left: 12px; }
 
-.where { margin: 14px 0 0; font-size: 12.5px; line-height: 1.6; }
+.start-card p.where { margin: -12px 0 18px; color: var(--text-3); font-size: 12.5px; }
 
 /* Gear upgrades */
 .settings { display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: center; padding-top: 14px; }
@@ -272,7 +283,7 @@ textarea.paste::placeholder { color: var(--text-3); font-family: var(--font); fo
 .move .verb.take { color: var(--pos); }
 .move .verb.drop { color: var(--text-3); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip { padding: 2px 9px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); font-size: 12.5px; color: var(--text-2); }
+.chip { padding: 3px 9px; border-radius: 6px; line-height: 1.45; background: var(--surface-2); border: 1px solid var(--border); font-size: 12.5px; color: var(--text-2); }
 .chip.named { color: var(--text); border-color: var(--border-strong); font-weight: 600; }
 .chip.drop { background: transparent; border-style: dashed; color: var(--text-3); }
 .chip.named.drop { color: var(--text-2); border-color: var(--border-strong); }
