@@ -29,7 +29,8 @@ pub const PINNED_VERSION: &str = "0.23.1";
 
 pub use data_dir::{DataDir, version_key};
 pub use engine::{
-    Assumption, AssumptionKind, Calculation, Engine, Identity, Outputs, SkillUse, UnsupportedMod,
+    Assumption, AssumptionKind, Calculation, Engine, Identity, Outputs, RollRange, SkillUse,
+    UnsupportedMod,
 };
 pub use error::{Error, Result};
 pub use gear::{GearSlot, StatValue, StatValues};

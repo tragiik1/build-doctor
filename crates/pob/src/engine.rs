@@ -80,6 +80,16 @@ pub enum AssumptionKind {
     Scenario,
 }
 
+/// Where and how high a stat rolls on one item category (PoB's roll data).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RollRange {
+    /// PoB's item category ("Ring", "Chest", "Wand", "AnyJewel", …).
+    pub category: String,
+    pub min: f64,
+    pub max: f64,
+}
+
 /// How a build uses an active skill.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SkillUse {
@@ -224,17 +234,25 @@ impl Engine {
             .collect()
     }
 
-    /// The lowest and highest explicit roll of a stat (its trade text, such
-    /// as "#% to Chaos Resistance") in PoB's roll data, and the item
-    /// category with the highest.
-    pub fn roll_range(&self, text: &str) -> Result<Option<(f64, f64, String)>> {
-        let (low, high, category): (Option<f64>, Option<f64>, Option<String>) = self
+    /// Where a stat (its trade text, such as "#% to Chaos Resistance")
+    /// rolls as an explicit mod, from PoB's roll data: one row per item
+    /// category, sorted by category.
+    pub fn roll_ranges(&self, text: &str) -> Result<Vec<RollRange>> {
+        let rows: Vec<Table> = self
             .lua
             .globals()
-            .get::<mlua::Function>("bd_roll_range")?
+            .get::<mlua::Function>("bd_roll_ranges")?
             .call(text)
             .map_err(|err| self.pob_error(&err))?;
-        Ok(low.zip(high).zip(category).map(|((l, h), c)| (l, h, c)))
+        rows.into_iter()
+            .map(|r| {
+                Ok(RollRange {
+                    category: r.get("category")?,
+                    min: r.get("min")?,
+                    max: r.get("max")?,
+                })
+            })
+            .collect()
     }
 
     /// "+1 to Level of all … Skills" lines for every such mod in PoB's roll
@@ -693,11 +711,26 @@ mod tests {
                 .call(xml)
                 .unwrap()
         };
-        let a = "<Config>\n\t<Input name=\"a\" boolean=\"true\"/>\n\t<Input name=\"b\" number=\"1\"/>\n</Config>";
-        let b = "<Config>\n\t<Input name=\"b\" number=\"1\"/>\n\t<Input name=\"a\" boolean=\"true\"/>\n</Config>";
-        let c = "<Config>\n\t<Input name=\"b\" number=\"2\"/>\n\t<Input name=\"a\" boolean=\"true\"/>\n</Config>";
-        assert_eq!(canonical(a), canonical(b));
-        assert_ne!(canonical(a), canonical(c));
+        let set = |inputs: &str| {
+            format!("<Config>\n<ConfigSet id=\"1\">\n{inputs}\n</ConfigSet>\n</Config>")
+        };
+        let a = set(
+            "\t<Input name=\"a\" boolean=\"true\"/>\n\t<Input name=\"customMods\" string=\"+1 to X\n+2 to Y\"/>\n\t<Input name=\"b\" number=\"1\"/>",
+        );
+        // Other element order, other attribute order, a multi-line value moved.
+        let b = set(
+            "\t<Input string=\"+1 to X\n+2 to Y\" name=\"customMods\"/>\n\t<Input number=\"1\" name=\"b\"/>\n\t<Input boolean=\"true\" name=\"a\"/>",
+        );
+        // A changed value, including inside the multi-line one.
+        let c = set(
+            "\t<Input name=\"a\" boolean=\"true\"/>\n\t<Input name=\"customMods\" string=\"+1 to X\n+3 to Y\"/>\n\t<Input name=\"b\" number=\"1\"/>",
+        );
+        let d = set(
+            "\t<Input name=\"a\" boolean=\"true\"/>\n\t<Input name=\"customMods\" string=\"+1 to X\n+2 to Y\"/>\n\t<Input name=\"b\" number=\"2\"/>",
+        );
+        assert_eq!(canonical(&a), canonical(&b));
+        assert_ne!(canonical(&a), canonical(&c));
+        assert_ne!(canonical(&a), canonical(&d));
     }
 
     /// An item as the game copies it: PoB reads it, finds the slots it fits,

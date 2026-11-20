@@ -3,6 +3,28 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-20: Restore check: whole config elements, any attribute order
+
+**Problem:** the diagnosis still failed now and then ("did not return to
+the build's original state") on builds whose config has a multi-line
+Custom Modifiers value or whose config attributes come out in another
+order. Sorting config lines one by one moved the first line of a
+multi-line element and left the rest; and PoB writes each element's
+attributes in pairs() order too. Reproduced on e7sIg_r6915z (2 of 6 runs).
+
+**What changed**
+- Each `<ConfigSet>` is compared as its sorted set of elements, however many
+  lines each spans, with attributes in name order. Every name and value must
+  still match.
+- Diagnosis findings for resistances and the skill-level rows now carry
+  where the stat rolls on gear (`rolls_on`, from PoB's roll data per item
+  category), for the coach.
+
+**What was tested**
+- Engine test: element order, attribute order and a moved multi-line value
+  compare equal; a changed value (also inside the multi-line one) does not.
+- e7sIg_r6915z 8 of 8 runs clean; all 13 fixtures clean.
+
 ## 2026-11-20: Icon redrawn to the user's preferred version
 
 The user preferred a bolder generated variant: thick cream frames, straight

@@ -174,37 +174,37 @@ local dirty = false
 --
 -- PoB also writes config inputs in Lua hash-table order (ConfigTab:Save
 -- iterates `pairs(configSet.input)`), and a what-if that adds a key (Custom
--- Modifiers) can reorder that table for good. Their order means nothing, so
--- runs of <Input>/<Placeholder> lines are sorted; every name and value must
--- still match.
-local function sortConfigRuns(xml)
-	local out, run, runKind = { }, { }, nil
-	local function flush()
-		table.sort(run)
-		for _, line in ipairs(run) do
-			out[#out + 1] = line
-		end
-		run, runKind = { }, nil
+-- Modifiers) can reorder that table for good; the attributes of each element
+-- come out in pairs() order too. Neither order means anything, so each
+-- <ConfigSet> is compared as its sorted set of elements, each with its
+-- attributes in name order. An element can span lines (Custom Modifiers
+-- holds one modifier per line); every name and value must still match.
+local function sortAttributes(element)
+	local name, attrs, close = element:match("^<([%w_]+)(%s.-)(/?>)$")
+	if not attrs then
+		return element
 	end
-	for line in (xml .. "\n"):gmatch("(.-)\n") do
-		local kind = line:match("^%s*<(Input) ") or line:match("^%s*<(Placeholder) ")
-		if kind then
-			if kind ~= runKind then
-				flush()
-			end
-			runKind = kind
-			run[#run + 1] = line
-		else
-			flush()
-			out[#out + 1] = line
-		end
+	local list = { }
+	for key, value in attrs:gmatch('([%w_:]+)="([^"]*)"') do
+		list[#list + 1] = key .. '="' .. value .. '"'
 	end
-	flush()
-	return table.concat(out, "\n")
+	table.sort(list)
+	return "<" .. name .. " " .. table.concat(list, " ") .. close
+end
+
+local function sortConfigSets(xml)
+	return (xml:gsub("(<ConfigSet[^>]*>)(.-)(</ConfigSet>)", function(open, inner, close)
+		local elements = { }
+		for element in inner:gmatch("<[%w_]+%s.-/>") do
+			elements[#elements + 1] = sortAttributes(element)
+		end
+		table.sort(elements)
+		return open .. "\n" .. table.concat(elements, "\n") .. "\n" .. close
+	end))
 end
 
 local function canonical(xml)
-	xml = sortConfigRuns(xml)
+	xml = sortConfigSets(xml)
 	xml = xml:gsub('(%a*[Nn]odes)="([%d,]*)"', function(name, list)
 		local ids = { }
 		for id in list:gmatch("%d+") do ids[#ids + 1] = tonumber(id) end
@@ -937,24 +937,35 @@ function bd_skill_usage()
 	return out
 end
 
--- The highest and lowest explicit roll PoB's trade data has for a stat text
--- in any item category, with the category of the highest.
-function bd_roll_range(text)
+-- Where a stat (its trade text, such as "#% to Chaos Resistance") rolls as
+-- an explicit mod, from PoB's roll data: one row per item category with the
+-- lowest and highest roll there. Jewel radius/base duplicates are left out
+-- (AnyJewel covers jewels).
+function bd_roll_ranges(text)
 	queryMods = queryMods or LoadModule("Data/QueryMods.lua")
-	local low, high, where
+	local byCategory = { }
 	for _, entry in pairs(queryMods.Explicit or { }) do
 		if entry.tradeMod and entry.tradeMod.text == text then
 			for category, range in pairs(entry) do
-				if type(range) == "table" and range.min and range.max then
-					if not high or range.max > high then
-						high, where = range.max, category
+				if type(range) == "table" and range.min and range.max
+					and category ~= "RadiusJewel" and category ~= "BaseJewel" then
+					local row = byCategory[category]
+					if row then
+						row.min = math.min(row.min, range.min)
+						row.max = math.max(row.max, range.max)
+					else
+						byCategory[category] = { category = category, min = range.min, max = range.max }
 					end
-					low = math.min(low or range.min, range.min)
 				end
 			end
 		end
 	end
-	return low, high, where
+	local out = { }
+	for _, row in pairs(byCategory) do
+		out[#out + 1] = row
+	end
+	table.sort(out, function(a, b) return a.category < b.category end)
+	return out
 end
 
 -- "+1 to Level of all … Skills" lines for every such mod in PoB's trade

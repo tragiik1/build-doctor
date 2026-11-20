@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use pob::{Outputs, Pool, SkillUse, StatKind, StatSheet};
+use pob::{Outputs, Pool, RollRange, SkillUse, StatKind, StatSheet};
 use serde::Serialize;
 
 use crate::{BuildInfo, Result, pct};
@@ -40,6 +40,9 @@ pub struct Finding {
     pub fix: Option<String>,
     /// What the fix changes, as PoB calculated it.
     pub effects: Vec<Effect>,
+    /// Where the fix's stat rolls on gear (PoB's roll data).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rolls_on: Vec<RollRange>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -86,6 +89,8 @@ pub struct LevelWorth {
     /// PoB warnings the extra level adds (a gem's attribute requirement
     /// the build no longer meets, say), which explain a loss.
     pub new_warnings: Vec<String>,
+    /// Where this mod rolls on gear (PoB's roll data).
+    pub rolls_on: Vec<RollRange>,
 }
 
 /// One PoB recalculation (or search) to run in the pool.
@@ -166,12 +171,21 @@ pub fn diagnose(pool: &Pool, xml: &str) -> Result<Diagnosis> {
             out: engine.outputs(&keys)?,
             cheapest_spirit: engine.cheapest_spirit()?,
             skills: engine.skill_usage()?,
-            chaos_roll: engine.roll_range("#% to Chaos Resistance")?,
             level_lines: engine.level_lines()?,
+            rolls: {
+                let mut texts: Vec<String> = RESISTANCES.iter().map(|e| resist_text(e)).collect();
+                texts.extend(engine.level_lines()?.iter().map(|l| level_text(l)));
+                texts
+                    .into_iter()
+                    .map(|t| engine.roll_ranges(&t).map(|r| (t, r)))
+                    .collect::<pob::Result<_>>()?
+            },
             saved: engine.ensure_original()?,
         })
     })?;
     let read = found.pop().expect("one item in, one out");
+    let rolls_for = |text: &str| read.rolls.get(text).cloned().unwrap_or_default();
+    let chaos_roll = span(&rolls_for(&resist_text("Chaos")));
     let base = StatSheet::from_build_xml(&read.saved)?;
     let out = &read.out;
     let value = |key: &str| out.get(key).copied();
@@ -190,7 +204,7 @@ pub fn diagnose(pool: &Pool, xml: &str) -> Result<Diagnosis> {
                 element,
                 now: value(&format!("{element}Resist")).unwrap_or(0.0),
                 missing,
-                raise: resist_step(element, missing, read.chaos_roll.as_ref()),
+                raise: resist_step(element, missing, chaos_roll.as_ref()),
             });
         }
     }
@@ -250,6 +264,7 @@ pub fn diagnose(pool: &Pool, xml: &str) -> Result<Diagnosis> {
                 let damage = Effect::new(label, before, after);
                 if before.is_finite() && after.is_finite() && damage.change.abs() >= 0.05 {
                     levels.push(LevelWorth {
+                        rolls_on: rolls_for(&level_text(&line)),
                         line,
                         damage,
                         new_warnings: new_warnings(&read.warnings, &warnings, &read.skills),
@@ -273,10 +288,14 @@ pub fn diagnose(pool: &Pool, xml: &str) -> Result<Diagnosis> {
                     raise,
                     reached,
                 },
-                read.chaos_roll.as_ref(),
+                chaos_roll.as_ref(),
                 &base,
                 &stats,
-            ),
+            )
+            .map(|f| Finding {
+                rolls_on: rolls_for(&resist_text(element)),
+                ..f
+            }),
             Outcome::Accuracy { added, hits } => {
                 search.record(added, hits);
                 None
@@ -330,8 +349,9 @@ struct Read {
     skills: HashMap<String, SkillUse>,
     /// Lowest and highest explicit chaos resistance roll, and the category
     /// with the highest.
-    chaos_roll: Option<(f64, f64, String)>,
     level_lines: Vec<String>,
+    /// Where each resistance and skill-level stat rolls, by trade text.
+    rolls: HashMap<String, Vec<RollRange>>,
     saved: String,
 }
 
@@ -355,6 +375,7 @@ fn note(title: String, detail: String) -> Finding {
         detail: Some(detail),
         fix: None,
         effects: Vec::new(),
+        rolls_on: Vec::new(),
     }
 }
 
@@ -379,6 +400,25 @@ pub(crate) fn measured(
 
 fn resist_line(element: &str, missing: f64) -> String {
     format!("+{}% to {element} Resistance", missing.ceil())
+}
+
+/// A resistance's trade text: "#% to Fire Resistance".
+fn resist_text(element: &str) -> String {
+    format!("#% to {element} Resistance")
+}
+
+/// A skill-level line's trade text: "+1 to Level of all Spell Skills" →
+/// "# to Level of all Spell Skills".
+fn level_text(line: &str) -> String {
+    line.replacen("+1", "#", 1)
+}
+
+/// Lowest and highest roll over all categories, and the category of the
+/// highest.
+fn span(rolls: &[RollRange]) -> Option<(f64, f64, String)> {
+    let low = rolls.iter().map(|r| r.min).reduce(f64::min)?;
+    let top = rolls.iter().max_by(|a, b| a.max.total_cmp(&b.max))?;
+    Some((low, top.max, top.category.clone()))
 }
 
 /// The middle of the best explicit chaos resistance roll in PoB's data:
@@ -451,6 +491,7 @@ fn resist(
         detail,
         fix: Some(resist_line(element, r.raise)),
         effects,
+        rolls_on: Vec::new(),
     })
 }
 
@@ -477,6 +518,7 @@ fn penalty(
         ),
         fix: None,
         effects,
+        rolls_on: Vec::new(),
     })
 }
 
@@ -568,6 +610,7 @@ fn warning(text: String, skills: &HashMap<String, SkillUse>) -> Option<Finding> 
                 ),
                 fix: None,
                 effects: Vec::new(),
+                rolls_on: Vec::new(),
             });
         }
         if !left_out.is_empty() {
@@ -592,6 +635,7 @@ fn warning(text: String, skills: &HashMap<String, SkillUse>) -> Option<Finding> 
         ),
         fix: None,
         effects: Vec::new(),
+        rolls_on: Vec::new(),
     })
 }
 
@@ -735,6 +779,7 @@ fn accuracy(out: &Outputs, base: &StatSheet, answer: AccuracyAnswer) -> Finding 
         ),
         fix: Some(accuracy_line(needed)),
         effects: vec![Effect::new(label, before, after)],
+        rolls_on: Vec::new(),
     }
 }
 
@@ -821,6 +866,7 @@ mod tests {
             detail: None,
             fix: None,
             effects: vec![Effect::new("x", 100.0, 100.0 + change)],
+            rolls_on: Vec::new(),
         }
     }
 
