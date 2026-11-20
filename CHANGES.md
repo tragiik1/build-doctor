@@ -3,6 +3,14 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-20: CI no longer installs WebKit on Linux
+
+The coach commit's release did not go out: the lint job spent its whole
+15 minutes downloading WebKit from Ubuntu's mirror (about 50 KB/s), the
+second time today. Linux lint now covers every crate except the desktop
+app, which needs no system packages; the app is linted with clippy on the
+Windows runner, where it is built anyway.
+
 ## 2026-11-20: The coach: "Your build", what to do and why
 
 **Goal (from user):** "explain to me what to do, why I need this, detailed …
