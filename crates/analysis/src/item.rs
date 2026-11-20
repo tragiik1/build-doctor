@@ -50,6 +50,8 @@ pub struct ItemCheck {
 #[serde(rename_all = "camelCase")]
 pub struct SlotResult {
     pub slot: String,
+    /// What to call the slot ("Ring 1", "Jewel socket 2").
+    pub label: String,
     /// What the build wears there now.
     pub replaces: Option<String>,
     /// "better", "worse" or "mixed", from damage and Total EHP.
@@ -110,6 +112,7 @@ pub fn item_check(pool: &Pool, xml: &str, item: &str) -> Result<ItemCheck> {
                 .collect();
             SlotResult {
                 slot: slot.slot.clone(),
+                label: slot.label.clone(),
                 replaces: slot.current.clone(),
                 verdict: verdict(&headline),
                 changes: measured(&shown, &base, &calc.stats),

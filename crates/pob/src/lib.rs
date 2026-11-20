@@ -15,6 +15,7 @@ pub mod config_xml;
 mod data_dir;
 mod engine;
 mod error;
+mod gear;
 pub mod input;
 mod install;
 mod item;
@@ -31,6 +32,7 @@ pub use engine::{
     Assumption, AssumptionKind, Calculation, Engine, Identity, Outputs, UnsupportedMod,
 };
 pub use error::{Error, Result};
+pub use gear::{GearSlot, StatValue, StatValues};
 pub use install::{Install, InstallProgress, PobVersion};
 pub use item::{ItemInfo, ItemSlot};
 pub use pool::Pool;

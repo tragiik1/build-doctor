@@ -11,7 +11,8 @@ use crate::{Calculation, Engine, Error, Result, StatSheet};
 pub struct ItemInfo {
     pub name: String,
     pub rarity: String,
-    /// Equipment slots it fits (not weapon swap or jewel sockets).
+    /// Slots it fits: shown equipment slots (not weapon swap) and allocated
+    /// passive tree jewel sockets.
     pub slots: Vec<ItemSlot>,
     /// Lines PoB cannot read; no number includes them.
     pub unread: Vec<String>,
@@ -20,7 +21,10 @@ pub struct ItemInfo {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemSlot {
+    /// PoB's slot name ("Ring 1", "Jewel 26725").
     pub slot: String,
+    /// What to call it ("Ring 1", "Jewel socket 2").
+    pub label: String,
     /// What the build has there now.
     pub current: Option<String>,
 }
@@ -39,6 +43,7 @@ impl Engine {
                 .map(|s| {
                     Ok(ItemSlot {
                         slot: s.get("slot")?,
+                        label: s.get("label")?,
                         current: s.get("current")?,
                     })
                 })

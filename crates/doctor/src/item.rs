@@ -25,7 +25,7 @@ pub fn run(pool: &Pool, xml: &str, item: &str) -> AnyResult<ExitCode> {
         println!();
         println!(
             "{} instead of {}: {}",
-            s.slot,
+            s.label,
             s.replaces.as_deref().unwrap_or("nothing"),
             s.verdict
         );

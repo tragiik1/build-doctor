@@ -3,6 +3,70 @@
 Running log so any session can pick up where the last stopped.
 Newest first.
 
+## 2026-11-20: Gear upgrades, jewels, bug fixes, clarity
+
+**Goal (from user):** build the trade feature (league typed once, no
+requests to GGG), hunt bugs and limitations, keep it clean, clear and
+precise.
+
+**What changed**
+- **Gear upgrades** (`analysis::gear`, `slot_values`, `trade_url`; `doctor
+  gear <build> [--slot S --league L --goal --max-price --currency]`; app
+  page after Diagnosis). For a worn item, every trade stat that can roll in
+  its slot (PoB's `Data/QueryMods.lua`, roll ranges per item category) is
+  put alone, at the middle of its range, on a blank rare of the worn base
+  and measured with PoB's calculator, split across the engines: what it
+  adds to damage, Total EHP and smallest max hit, in percent of the
+  build's current numbers. Also what the worn item adds over a blank of its
+  base. The trade link (opened in the browser through Tauri's opener
+  plugin, only for `https://www.pathofexile.com/trade2/search/` links; or
+  copied) searches the slot's category, non-unique, not mirrored, sellers
+  available now, sorted by a weighted sum of the top 20 stats for the goal
+  (Damage; Survival = EHP + smallest max hit; Both). Weight = share per
+  point, so the sum estimates the gain in percent. Weapons and armour keep
+  to the worn base by default (base damage and defences are not mods, so
+  other bases would rank wrongly); jewellery searches every base (its
+  implicit is weighted). Optional price cap in exalted, divine or chaos. The
+  league is typed once and remembered; the app makes no request to GGG.
+- **Jewels in Check an item**: allocated passive tree jewel sockets are
+  slots too ("Jewel socket 2", in tree order), equipped and restored like
+  equipment.
+- **Realistic numbers** calculates on the first visit (the answer is the
+  page), and only offers "Update with your ticks" once ticks change.
+- Start page says where to get a PoB code.
+
+**Bugs fixed**
+- An error from one page stayed on screen on the next.
+- Work in progress showed its progress on whichever page was open; now on
+  its own page, and other pages say what is running. Opening Gear
+  upgrades during other work replaced that work's progress.
+- A gear measurement finishing after another build was loaded could be
+  kept for the new build (load counter now guards the cache).
+- Messages written for the user by the bridge read "PoB reported an
+  error: …"; they now show as written (`Error::Message`).
+- "PoB's numbers never settled" dumped raw XML lines; it now says in plain
+  words what happened and names what keeps changing.
+- A doc comment had drifted onto the wrong function.
+
+**Limitations removed**
+- Memory: engines collect PoB's start-up garbage (about 100 MB less each),
+  and the app runs at most 4 engines (peak about 1.6 GB instead of nearly
+  3 GB with 8), since it runs next to the game.
+- Jewels can be checked (above).
+
+**What was tested**
+- Unit tests: trade link (weights, goal, price, base filter, refusals),
+  significant-digit rounding, shares ignore immunities, unsettled message.
+- Engine test: a jewel in each of three allocated sockets, restored
+  byte-identical. Engine tests 31/31; `doctor verify` exact on 0.23.1.
+- Real builds: Snap Shaman Ring 1 (91 stats measured; cold resistance
+  +13% EHP, 10% cooldown recovery +9.9% damage), Ice Shot Deadeye body
+  armour and helmet; link length 0.7-3 KB.
+- App screenshots: Diagnosis, Gear upgrades (slot grid, measured slot),
+  Realistic numbers opening with results.
+- Not tested here: the trade link in a browser (the trade site is not
+  reachable from this environment); check it opens the intended search.
+
 ## 2026-11-19: Item check, and a layout that says what to do next
 
 **Goal (from user):** "it must actually help, i don't want to feel lost

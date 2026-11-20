@@ -3,6 +3,7 @@
 //! the desktop app) only present.
 //!
 //! - [`diagnose`]: what is wrong with a build, each fix measured by PoB.
+//! - [`gear`]: what each gear stat is worth, and a trade search ranked by it.
 //! - [`item`]: whether an item is an upgrade, slot by slot.
 //! - [`overview`]: a build as PoB sees it: stats, assumptions, ignored mods,
 //!   and whether PoB reproduces the build's saved numbers.
@@ -11,6 +12,7 @@
 //! - [`plan`]: a step-by-step passive tree plan, each step exact.
 
 pub mod diagnose;
+pub mod gear;
 pub mod item;
 pub mod overview;
 pub mod plan;
@@ -20,6 +22,7 @@ use pob::Summary;
 use serde::Serialize;
 
 pub use diagnose::{Diagnosis, Finding, Severity, diagnose};
+pub use gear::{Gear, SlotValues, TradeOptions, gear, slot_values, trade_url};
 pub use item::{ItemCheck, item_check};
 pub use overview::{Overview, overview};
 pub use plan::{Goal, Plan, PlanOptions, PlanProgress, plan};

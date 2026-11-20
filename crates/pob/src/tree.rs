@@ -42,7 +42,7 @@ impl Summary {
         }
     }
 
-    fn from_lua(table: &Table) -> Result<Self> {
+    pub(crate) fn from_lua(table: &Table) -> Result<Self> {
         Ok(Self {
             full_dps: table.get("fullDps")?,
             combined_dps: table.get("combinedDps")?,
@@ -168,7 +168,7 @@ impl Engine {
             .globals()
             .get::<mlua::Function>(name)?
             .call::<R>(args)
-            .map_err(|err| Error::Pob(self.describe(&err, false)))
+            .map_err(|err| self.pob_error(&err))
     }
 }
 

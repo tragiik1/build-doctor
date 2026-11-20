@@ -21,6 +21,10 @@ file verified). Then paste a PoB code or link:
   hit chance below 100%, each with the exact amount needed and what PoB
   says it changes; a resistance penalty that is not the endgame one; PoB's
   own warnings.
+- **Gear upgrades**: pick a slot; PoB measures what every stat that can
+  roll there is worth to your build, then opens a trade search that lists
+  items for sale best first. Type your league once; the app itself makes no
+  request to GGG.
 - **Check an item**: paste an item copied in game with Ctrl+C. PoB equips
   it, exactly as written, in each slot it fits and shows what changes:
   damage, survival, resistances, and any requirement it breaks.
@@ -53,6 +57,8 @@ doctor check <code | file | link>     # calculate a build, compare with its save
 doctor check <...> --all              # every stat PoB produced, exactly as PoB wrote it
 doctor diagnose <build>               # what to fix first, each fix measured by PoB
 doctor item <build> <item.txt>        # is this item an upgrade? (- reads it from stdin)
+doctor gear <build> [--slot "Ring 1" --league Standard]
+                                      # what each gear stat is worth, and a trade search link
 doctor realistic <build>              # numbers without the combat conditions the build assumes
 doctor realistic <build> --keep shocked --keep "skill recently"
                                       # ...keeping only the ones you really sustain

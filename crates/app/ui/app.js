@@ -13,6 +13,8 @@ const state = {
   diagnosis: null,       // { status: "running" | "done" | "error", result, error }
   itemText: "",
   itemCheck: null,
+  gear: null,            // { slots, values: { [slot]: SlotValues }, selected, link, copied }
+  trade: loadTrade(),    // { league, goal, maxPrice, currency, anyBase }
   loadSeq: 0,            // which load a running diagnosis belongs to
   kept: new Set(),       // condition vars the player keeps up
   realistic: null,
@@ -63,10 +65,34 @@ function oneLine(v) {
   return String(v).split(/[\n\t]+/).map((s) => s.trim()).filter(Boolean).join("; ");
 }
 
+// Search settings survive restarts (per-viewer convenience only).
+function loadTrade() {
+  const defaults = { league: "", goal: "balanced", maxPrice: "", currency: "exalted", anyBase: false };
+  try {
+    return { ...defaults, ...JSON.parse(localStorage.getItem("trade") ?? "{}") };
+  } catch {
+    return defaults;
+  }
+}
+
+function saveTrade() {
+  try {
+    localStorage.setItem("trade", JSON.stringify(state.trade));
+  } catch {
+    // Storage can be unavailable; the settings then last for this session.
+  }
+}
+
 // ---------------------------------------------------------------- actions
 
+// Whether the work in progress was started on the page being shown.
+const busyHere = () => state.busy && state.busy.view === state.view;
+
+// Runs `task` as the one piece of work in progress, shown on the page that
+// started it; other pages say it is running. Buttons that start work are
+// disabled while it runs.
 async function run(title, detail, task) {
-  state.busy = { title, detail, progress: null };
+  state.busy = { title, detail, progress: null, view: state.view };
   state.error = null;
   render();
   try {
@@ -148,6 +174,8 @@ async function loadBuild(input) {
   state.realisticKept = null;
   state.plan = null;
   state.itemCheck = null;
+  state.gear = null;
+  state.gearLoading = false;
   state.view = "diagnosis";
   render();
 }
@@ -164,6 +192,83 @@ async function runDiagnosis() {
     if (seq === state.loadSeq) state.diagnosis = { status: "error", error: String(err) };
   }
   if (seq === state.loadSeq) render();
+}
+
+// Reads the worn items (instant) the first time the page opens. Not a
+// `run`: it must not replace work in progress.
+async function openGear() {
+  if (state.gear || state.gearLoading) return;
+  state.gearLoading = true;
+  try {
+    const result = await invoke("gear");
+    state.gear = { slots: result.slots, values: {}, selected: null, copied: false, opened: false };
+  } catch (err) {
+    state.error = String(err);
+  } finally {
+    state.gearLoading = false;
+    render();
+  }
+}
+
+async function measureSlot(slot) {
+  state.gear.selected = slot;
+  state.gear.copied = state.gear.opened = false;
+  if (!state.gear.values[slot]) {
+    const result = await run(`Measuring every stat for ${slot}`, "Path of Building puts each stat that can roll there on a blank item of your base and recalculates your build. About 10 to 30 seconds.", () => invoke("slot_values", { slot }));
+    if (!result) { render(); return; }
+    state.gear.values[slot] = result;
+  }
+  render();
+}
+
+function tradeOptions() {
+  const t = state.trade;
+  const max = parseFloat(String(t.maxPrice).replace(",", "."));
+  return {
+    league: t.league,
+    goal: t.goal,
+    maxPrice: Number.isFinite(max) && max > 0 ? max : null,
+    currency: t.currency,
+    anyBase: t.anyBase,
+  };
+}
+
+async function tradeLink() {
+  state.error = null;
+  try {
+    return await invoke("trade_link", { slot: state.gear.selected, options: tradeOptions() });
+  } catch (err) {
+    state.error = String(err);
+    render();
+    return null;
+  }
+}
+
+async function openTrade() {
+  const url = await tradeLink();
+  if (!url) return;
+  try {
+    await invoke("open_trade", { url });
+    state.gear.opened = true;
+    render();
+  } catch (err) {
+    state.error = String(err);
+    render();
+  }
+}
+
+async function copyTrade() {
+  const url = await tradeLink();
+  if (!url) return;
+  await navigator.clipboard.writeText(url);
+  state.gear.copied = true;
+  render();
+}
+
+// Search settings changed: earlier confirmations no longer apply.
+function tradeChanged() {
+  saveTrade();
+  if (state.gear) state.gear.copied = state.gear.opened = false;
 }
 
 async function checkItem() {
@@ -266,6 +371,7 @@ function renderStart() {
           ? `<button class="btn primary" data-action="load" ${state.busy ? 'aria-disabled="true"' : ""}>Analyse build</button>`
           : `<button class="btn primary" data-action="install" ${state.busy || !e ? 'aria-disabled="true"' : ""}>Install Path of Building</button>`}
       </div>
+      <p class="faint where">Where to get one: in Path of Building, Import/Export Build, then Generate and Copy. On poe.ninja, open a character and use its Path of Building export.</p>
       ${state.busy ? renderBusy() : ""}
       ${state.error ? `<div class="error">${esc(state.error)}</div>` : ""}
       ${state.update ? `<div style="margin-top:18px">${renderUpdate()}</div>` : ""}
@@ -288,6 +394,7 @@ function renderRail() {
   const findings = state.diagnosis?.status === "done" ? state.diagnosis.result.findings.filter((f) => f.severity !== "note").length : null;
   const nav = [
     ["diagnosis", "Diagnosis", "What to fix first", findings ? `${findings}` : ""],
+    ["gear", "Gear upgrades", "What to buy next", ""],
     ["item", "Check an item", "Is it an upgrade?", ""],
     ["plan", "Passive tree plan", "Free gains from respecs", state.plan ? `${state.plan.steps.length} steps` : ""],
     ["realistic", "Realistic numbers", "Without assumed buffs", conditions ? `${conditions}` : ""],
@@ -313,14 +420,21 @@ function renderRail() {
     </aside>`;
 }
 
+const PAGES = { diagnosis: "Diagnosis", gear: "Gear upgrades", item: "Check an item", plan: "Passive tree plan", realistic: "Realistic numbers", stats: "Stats" };
+
 function renderView() {
-  const busy = state.busy ? renderBusy() : "";
+  const here = !state.busy || state.busy.view === state.view;
+  const busy = state.busy && here ? renderBusy() : "";
+  const elsewhere = state.busy && !here
+    ? `<div class="verdict"><strong>Working</strong><span class="muted">${esc(state.busy.title)} on ${esc(PAGES[state.busy.view])}. You can keep reading; new work starts when it is done.</span></div>`
+    : "";
   const error = state.error ? `<div class="error">${esc(state.error)}</div>` : "";
-  if (state.view === "realistic") return renderRealistic() + busy + error;
-  if (state.view === "plan") return renderPlan() + error;
-  if (state.view === "item") return renderItem() + error;
-  if (state.view === "stats") return renderStats() + error;
-  return renderDiagnosisPage() + error;
+  if (state.view === "realistic") return elsewhere + renderRealistic() + busy + error;
+  if (state.view === "plan") return elsewhere + renderPlan() + error;
+  if (state.view === "item") return elsewhere + renderItem() + error;
+  if (state.view === "gear") return elsewhere + renderGear() + error;
+  if (state.view === "stats") return elsewhere + renderStats() + error;
+  return elsewhere + renderDiagnosisPage() + error;
 }
 
 function stat(group, name) {
@@ -371,6 +485,7 @@ function renderNext() {
   const o = state.overview;
   const conditions = o.assumptions.filter((a) => a.kind === "condition").length;
   const rows = [
+    ["gear", "Gear upgrades", "Pick a slot: Path of Building measures what every stat that can roll there is worth to you, then opens a trade search ranked by it."],
     ["item", "Check an item", "Paste an item copied in game with Ctrl+C. Path of Building equips it in each slot it fits and shows exactly what changes."],
     ["plan", "Passive tree plan", "The best passive swaps for your build, same point count, each one recalculated. Respecs cost only gold."],
     ["realistic", "Realistic numbers", conditions
@@ -426,6 +541,83 @@ function renderStats() {
     </div>`;
 }
 
+const GOALS = [["damage", "Damage"], ["survival", "Survival"], ["balanced", "Both"]];
+
+function goalScore(share, goal) {
+  if (goal === "damage") return share.damage;
+  if (goal === "survival") return share.ehp + share.minHit;
+  return share.damage + share.ehp + share.minHit;
+}
+
+function share(v) {
+  if (Math.abs(v) < 0.005) return `<span class="faint">–</span>`;
+  return `<span class="${v > 0 ? "pos" : "neg"}">${v > 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}%</span>`;
+}
+
+// "What should I buy for this slot?"
+function renderGear() {
+  const g = state.gear;
+  const t = state.trade;
+  const head = `
+    <div class="page-head"><div>
+      <h1>Gear upgrades</h1>
+      <p>Pick a slot. Path of Building measures what every stat that can roll there is worth to your build, then builds a trade search that lists items for sale best first.</p>
+    </div></div>`;
+  if (!g) return head + (state.gearLoading ? `<div class="panel empty">Reading your gear…</div>` : "");
+
+  const settings = `
+    <div class="panel" style="margin-bottom:16px"><div class="panel-body settings">
+      <label class="field"><span class="field-label">League</span><input class="input" id="league" value="${esc(t.league)}" placeholder="As on the trade site, e.g. Standard" spellcheck="false"></label>
+      <div class="field"><span class="field-label">Rank by</span><div class="seg">${GOALS.map(([v, l]) => `<button class="${t.goal === v ? "on" : ""}" data-trade-goal="${v}">${l}</button>`).join("")}</div></div>
+      <label class="field"><span class="field-label">Max price</span><span class="price"><input class="input" id="max-price" value="${esc(t.maxPrice)}" placeholder="Any" inputmode="decimal">
+        <select class="input" id="currency">${[["exalted", "Exalted"], ["divine", "Divine"], ["chaos", "Chaos"]].map(([v, l]) => `<option value="${v}" ${t.currency === v ? "selected" : ""}>${l}</option>`).join("")}</select></span></label>
+    </div></div>`;
+
+  const slots = `<div class="slot-grid">${g.slots.map((s) => `
+    <button class="slot-card ${g.selected === s.slot ? "on" : ""}" data-slot="${esc(s.slot)}" ${state.busy ? 'aria-disabled="true"' : ""}>
+      <span class="slot-name">${esc(s.slot)}</span><span class="slot-item">${esc(s.item.split(", ")[0])}</span><span class="slot-base">${esc(s.base)}</span>
+    </button>`).join("")}</div>`;
+
+  let detail = "";
+  if (busyHere()) detail = renderBusy();
+  else if (g.selected && g.values[g.selected]) detail = renderSlotValues(g.values[g.selected]);
+  else detail = `<div class="panel empty">Pick a slot above. Measuring takes 10 to 30 seconds; switching between measured slots is instant.</div>`;
+  return head + settings + slots + detail;
+}
+
+function renderSlotValues(v) {
+  const t = state.trade;
+  const rows = v.stats.slice().sort((a, b) => goalScore(b.share, t.goal) - goalScore(a.share, t.goal)).filter((s) => goalScore(s.share, t.goal) >= 0.05);
+  const shown = rows.slice(0, 15);
+  const w = v.wornItem;
+  const worn = [["damage", w.damage], ["Total EHP", w.ehp], ["smallest max hit", w.minHit]]
+    .filter(([, x]) => Math.abs(x) >= 0.05)
+    .map(([l, x]) => `${x > 0 ? "+" : "−"}${Math.abs(x).toFixed(1)}% ${l}`);
+  const sameBase = v.slot.tradeCategory.startsWith("weapon.") || v.slot.tradeCategory.startsWith("armour.");
+  const table = (list) => `<table class="data stats-table">
+    <tr><th>Stat, at a mid roll</th><th>Damage</th><th>Total EHP</th><th>Smallest max hit</th></tr>
+    ${list.map((s) => `<tr><td>${esc(s.line)}${s.implicit ? ` <span class="faint">implicit</span>` : ""}</td><td>${share(s.share.damage)}</td><td>${share(s.share.ehp)}</td><td>${share(s.share.minHit)}</td></tr>`).join("")}
+  </table>`;
+  return `<div class="panel">
+    <div class="panel-head"><h2>${esc(v.slot.slot)} <span class="faint" style="font-weight:400">${esc(v.slot.item)}</span></h2><span class="meta">${v.measured} stats measured</span></div>
+    <div class="panel-body">
+      <p class="muted" style="margin:0 0 14px">Your ${esc(v.slot.item.split(",")[0])} ${worn.length ? `adds ${worn.join(", ")}` : "adds nothing measurable"} compared with a blank ${esc(v.slot.base)}.</p>
+      <div class="toolbar">
+        <button class="btn primary" data-action="open-trade" ${rows.length ? "" : 'aria-disabled="true"'}>${state.gear.opened ? "Opened in your browser" : "Open trade search"}</button>
+        <button class="btn" data-action="copy-trade" ${rows.length ? "" : 'aria-disabled="true"'}>${state.gear.copied ? "Link copied" : "Copy link"}</button>
+        ${sameBase ? `<label class="check-label"><input type="checkbox" class="check" id="any-base" ${t.anyBase ? "checked" : ""}> Include other bases</label>` : ""}
+      </div>
+      <ol class="how">
+        <li>The search lists items for sale, best for your build first. Its weighted sum is the estimated gain in percent, adding up each stat's value below.</li>
+        <li>Copy an item you like (the trade site's copy button) and paste it into <button class="link accent" data-view="item">Check an item</button> for the exact result: stats measured alone can be worth more or less together.</li>
+        ${sameBase && !t.anyBase ? `<li>Only ${esc(v.slot.base)} is searched: ${v.slot.tradeCategory.startsWith("weapon.") ? "a base's own damage is" : "a base's own defences are"} not in the weights, so other bases would rank wrongly.</li>` : ""}
+      </ol>
+      ${rows.length ? table(shown) : `<div class="muted">No stat that can roll here adds to ${t.goal === "damage" ? "damage" : t.goal === "survival" ? "survival" : "damage or survival"} for this build.</div>`}
+      ${rows.length > shown.length ? `<details><summary>${rows.length - shown.length} more stats</summary>${table(rows.slice(shown.length))}</details>` : ""}
+    </div>
+  </div>`;
+}
+
 // "Is this item an upgrade?"
 function renderItem() {
   const c = state.itemCheck;
@@ -442,13 +634,13 @@ function renderItem() {
         <button class="btn primary" data-action="check-item" ${state.busy ? 'aria-disabled="true"' : ""}>Check item</button>
       </div>
     </div></div>`;
-  if (state.busy) return head + renderBusy();
+  if (busyHere()) return head + renderBusy();
   if (!c) return head;
   const unread = c.unread.length
     ? `<div class="verdict warn"><strong>Not counted</strong><span class="muted">Path of Building cannot read ${c.unread.length === 1 ? "this line" : "these lines"}, so no number includes ${c.unread.length === 1 ? "it" : "them"}: ${c.unread.map(esc).join(" · ")}</span></div>`
     : "";
   if (!c.slots.length) {
-    return head + unread + `<div class="panel empty">Path of Building found no equipment slot for ${esc(c.item)} in this build. Jewels and weapon-swap slots are not checked yet.</div>`;
+    return head + unread + `<div class="panel empty">${esc(c.item)} fits no slot this build uses: no equipment slot of its kind, and no allocated jewel socket that takes it. Weapon-swap slots are not checked.</div>`;
   }
   const verdicts = {
     better: ["Better", "pos", "More damage or survival, and less of neither."],
@@ -459,7 +651,7 @@ function renderItem() {
   const slots = c.slots.map((s) => {
     const [word, toneClass, meaning] = verdicts[s.verdict];
     return `<div class="panel slot-result">
-      <div class="panel-head"><h2>${esc(s.slot)} <span class="faint" style="font-weight:400">instead of ${esc(s.replaces ?? "nothing")}</span></h2><span class="verdict-word ${toneClass}" title="${esc(meaning)}">${word}</span></div>
+      <div class="panel-head"><h2>${esc(s.label)} <span class="faint" style="font-weight:400">instead of ${esc(s.replaces ?? "nothing")}</span></h2><span class="verdict-word ${toneClass}" title="${esc(meaning)}">${word}</span></div>
       <div class="panel-body">
         <div class="tiles three">${s.headline.map((e) => `<div class="tile"><div class="label">${esc(e.label)}</div><div class="value">${fmt(e.after)}</div><div class="sub ${tone(e.change)}">${signed(e.change)} <span class="faint">from ${fmt(e.before)}</span></div></div>`).join("")}</div>
         ${s.newWarnings.length ? `<div class="item-warnings">${s.newWarnings.map((w) => `<div><span class="neg">Path of Building warns</span> ${esc(w)}</div>`).join("")}</div>` : ""}
@@ -537,11 +729,12 @@ function renderRealistic() {
   const head = `
     <div class="page-head"><div>
       <h1>Realistic numbers</h1>
-      <p>Each condition the build assumes, switched off one at a time by Path of Building. Tick the ones you really keep up on a boss; the plan uses the same choice.</p>
+      <p>Your numbers assume combat conditions, such as an enemy being shocked. Path of Building switches each one off to show what it is worth. Tick the ones you really keep up in a boss fight: “Keeping yours” then shows your realistic numbers, and the passive tree plan uses the same ticks.</p>
     </div>
-    <button class="btn primary" data-action="realistic" ${state.busy || !conditions.length ? 'aria-disabled="true"' : ""}>${r ? (stale ? "Recalculate" : "Recalculate") : "Calculate"}</button></div>`;
+    ${!r || stale ? `<button class="btn primary" data-action="realistic" ${state.busy || !conditions.length ? 'aria-disabled="true"' : ""}>${r ? "Update with your ticks" : "Calculate"}</button>` : ""}</div>`;
   if (!conditions.length) return head + `<div class="panel empty">This build assumes no combat conditions, so its numbers already are the realistic ones.</div>`;
   if (!r) {
+    if (busyHere()) return head;
     return head + `<div class="panel"><div class="panel-head"><h2>Conditions</h2><span class="meta">${conditions.length} assumed · tick what you sustain</span></div><div class="panel-body"><table class="data conds">${conditions.map((c) => `<tr class="${state.kept.has(c.var) ? "kept" : ""}"><td><label class="cond"><input type="checkbox" class="check" data-keep="${esc(c.var)}" ${state.kept.has(c.var) ? "checked" : ""}><span class="cond-text"><div>${esc(c.label)}</div><small>${condNote(c)}</small></span></label></td></tr>`).join("")}</table></div></div>`;
   }
 
@@ -558,7 +751,7 @@ function renderRealistic() {
           return `<td class="big">${fmt(v)}${type}</td><td class="change ${c === 0 ? "" : tone(pct(r.configured[i], v))}">${ch}</td>`;
         }).join("")}</tr>`).join("")}
       </table>
-      ${stale ? `<div class="note">Your ticks changed since this was calculated. Recalculate to update “Keeping yours”.</div>` : ""}
+      ${stale ? `<div class="note">Your ticks changed since this was calculated. Use “Update with your ticks” to see your realistic numbers.</div>` : ""}
     </div></div>`;
 
   const dmgIndex = r.metrics.findIndex((m) => m.damage);
@@ -621,7 +814,7 @@ function renderPlan() {
       <button class="btn primary" data-action="plan" ${state.busy ? 'aria-disabled="true"' : ""}>${p ? "Rebuild plan" : "Build plan"}</button>
     </div>`;
 
-  if (state.busy) {
+  if (busyHere()) {
     const b = state.busy;
     return head + `<div class="panel progress">
       <div class="phase"><strong>${esc(b.detail || "Starting")}</strong><button class="btn small" data-action="cancel">Stop after this step</button></div>
@@ -694,16 +887,24 @@ function delta(label, change) {
 // ---------------------------------------------------------------- events
 
 document.addEventListener("click", async (event) => {
-  const target = event.target.closest("[data-action],[data-view],[data-goal],[data-steps],[data-loss]");
+  const target = event.target.closest("[data-action],[data-view],[data-goal],[data-steps],[data-loss],[data-slot],[data-trade-goal]");
   if (!target || target.getAttribute("aria-disabled") === "true") return;
   if (target.dataset.view) {
     state.view = target.dataset.view;
     state.copied = false;
+    state.error = null;
     render();
     document.querySelector(".main")?.scrollTo(0, 0);
+    if (state.view === "gear") openGear();
+    // What each condition is worth is the page's answer: calculate it on
+    // the first visit rather than wait for a click.
+    if (state.view === "realistic" && !state.realistic && !state.busy
+        && state.overview.assumptions.some((a) => a.kind === "condition")) runRealistic();
     return;
   }
   if (target.dataset.goal) { state.goal = target.dataset.goal; render(); return; }
+  if (target.dataset.slot) { measureSlot(target.dataset.slot); return; }
+  if (target.dataset.tradeGoal) { state.trade.goal = target.dataset.tradeGoal; tradeChanged(); render(); return; }
   if (target.dataset.steps) { state.steps = Number(target.dataset.steps); render(); return; }
   if (target.dataset.loss) { state.maxLoss = target.dataset.loss === "any" ? null : Number(target.dataset.loss); render(); return; }
   switch (target.dataset.action) {
@@ -717,6 +918,8 @@ document.addEventListener("click", async (event) => {
     case "reset": return resetBuild();
     case "realistic": return runRealistic();
     case "check-item": return checkItem();
+    case "open-trade": return openTrade();
+    case "copy-trade": return copyTrade();
     case "plan": return runPlan();
     case "cancel":
       target.textContent = "Stopping…";
@@ -731,10 +934,22 @@ document.addEventListener("click", async (event) => {
 });
 
 document.addEventListener("input", (event) => {
-  if (event.target.id === "item-paste") state.itemText = event.target.value;
+  const id = event.target.id;
+  if (id === "item-paste") state.itemText = event.target.value;
+  if (id === "league" || id === "max-price") {
+    state.trade[id === "league" ? "league" : "maxPrice"] = event.target.value;
+    tradeChanged();
+  }
 });
 
 document.addEventListener("change", (event) => {
+  if (event.target.id === "currency" || event.target.id === "any-base") {
+    if (event.target.id === "currency") state.trade.currency = event.target.value;
+    else state.trade.anyBase = event.target.checked;
+    tradeChanged();
+    render();
+    return;
+  }
   const box = event.target.closest("[data-keep]");
   if (!box) return;
   if (box.checked) state.kept.add(box.dataset.keep);

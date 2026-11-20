@@ -8,10 +8,14 @@
 
 mod update;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use analysis::{Diagnosis, Goal, ItemCheck, Overview, Plan, PlanOptions, PlanProgress, Realistic};
+use analysis::{
+    Diagnosis, Gear, Goal, ItemCheck, Overview, Plan, PlanOptions, PlanProgress, Realistic,
+    SlotValues, TradeOptions,
+};
 use pob::{DataDir, Pool};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -21,6 +25,11 @@ struct AppState {
     pool: Mutex<Option<Arc<Pool>>>,
     /// The loaded build, as the user gave it.
     build: Mutex<Option<String>>,
+    /// Gear values measured for the loaded build, by slot.
+    gear: Mutex<HashMap<String, SlotValues>>,
+    /// Counts build loads, so work started for an earlier build is not
+    /// kept for the current one.
+    loads: AtomicU64,
     cancel: Arc<AtomicBool>,
 }
 
@@ -69,6 +78,8 @@ async fn load_build(state: State<'_, AppState>, input: String) -> CommandResult<
     })
     .await?;
     *state.build.lock().map_err(|e| e.to_string())? = Some(xml);
+    state.loads.fetch_add(1, Ordering::SeqCst);
+    state.gear.lock().map_err(|e| e.to_string())?.clear();
     Ok(overview)
 }
 
@@ -82,6 +93,59 @@ async fn diagnose(state: State<'_, AppState>) -> CommandResult<Diagnosis> {
 async fn check_item(state: State<'_, AppState>, item: String) -> CommandResult<ItemCheck> {
     let (pool, xml) = (pool(&state)?, build(&state)?);
     blocking(move || Ok(analysis::item_check(&pool, &xml, &item)?)).await
+}
+
+#[tauri::command]
+async fn gear(state: State<'_, AppState>) -> CommandResult<Gear> {
+    let (pool, xml) = (pool(&state)?, build(&state)?);
+    blocking(move || Ok(analysis::gear(&pool, &xml)?)).await
+}
+
+/// What each stat that can roll in `slot` is worth; measured once per build.
+#[tauri::command]
+async fn slot_values(state: State<'_, AppState>, slot: String) -> CommandResult<SlotValues> {
+    if let Some(values) = state.gear.lock().map_err(|e| e.to_string())?.get(&slot) {
+        return Ok(values.clone());
+    }
+    let load = state.loads.load(Ordering::SeqCst);
+    let (pool, xml) = (pool(&state)?, build(&state)?);
+    let name = slot.clone();
+    let values = blocking(move || Ok(analysis::slot_values(&pool, &xml, &name)?)).await?;
+    if state.loads.load(Ordering::SeqCst) == load {
+        state
+            .gear
+            .lock()
+            .map_err(|e| e.to_string())?
+            .insert(slot, values.clone());
+    }
+    Ok(values)
+}
+
+/// The trade search link for a measured slot.
+#[tauri::command]
+fn trade_link(
+    state: State<'_, AppState>,
+    slot: String,
+    options: TradeOptions,
+) -> CommandResult<String> {
+    let gear = state.gear.lock().map_err(|e| e.to_string())?;
+    let values = gear
+        .get(&slot)
+        .ok_or_else(|| format!("{slot} has not been measured yet."))?;
+    analysis::trade_url(values, &options).map_err(|e| e.to_string())
+}
+
+/// Opens a trade search in the default browser. Only trade-site search
+/// links are opened.
+#[tauri::command]
+fn open_trade(app: AppHandle, url: String) -> CommandResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    if !url.starts_with("https://www.pathofexile.com/trade2/search/") {
+        return Err("Only trade site searches can be opened.".into());
+    }
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| format!("Could not open the browser: {e}"))
 }
 
 #[tauri::command]
@@ -162,8 +226,9 @@ fn cancel_plan(state: State<'_, AppState>) {
     state.cancel.store(true, Ordering::SeqCst);
 }
 
-/// The warm engine pool, started on first use with one engine per core (at
-/// most 8; each holds roughly 300 MB).
+/// The warm engine pool, started on first use with one engine per core, at
+/// most 4: each holds PoB's game data (roughly 300 MB), and the app runs
+/// next to the game.
 fn pool(state: &AppState) -> CommandResult<Arc<Pool>> {
     let mut slot = state.pool.lock().map_err(|e| e.to_string())?;
     if let Some(pool) = slot.as_ref() {
@@ -175,7 +240,7 @@ fn pool(state: &AppState) -> CommandResult<Arc<Pool>> {
         .map_err(|e| e.to_string())?;
     let size = std::thread::available_parallelism()
         .map_or(2, |n| n.get())
-        .min(8);
+        .min(4);
     let pool = Arc::new(Pool::new(&install, size).map_err(|e| e.to_string())?);
     *slot = Some(Arc::clone(&pool));
     Ok(pool)
@@ -213,14 +278,21 @@ fn main() {
             data,
             pool: Mutex::new(None),
             build: Mutex::new(None),
+            gear: Mutex::new(HashMap::new()),
+            loads: AtomicU64::new(0),
             cancel: Arc::new(AtomicBool::new(false)),
         })
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             engine_status,
             install_engine,
             load_build,
             diagnose,
             check_item,
+            gear,
+            slot_values,
+            trade_link,
+            open_trade,
             realistic,
             plan,
             cancel_plan,

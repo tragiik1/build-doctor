@@ -1,6 +1,6 @@
 [package]
 name = "analysis"
-description = "Build analyses on top of PoB: overview, realistic numbers, passive tree plan."
+description = "Build analyses on top of PoB: diagnosis, item check, gear values and trade search, realistic numbers, passive tree plan."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 pob.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
 [lints]

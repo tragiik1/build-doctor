@@ -105,6 +105,10 @@ end
 -- build is replaced. Match the app.
 launch.devMode = false
 
+-- Start-up leaves a lot of PoB's data parsing behind as garbage. Collect it
+-- now, so every engine starts small and peak memory stays down.
+collectgarbage("collect")
+
 -- PoB reports some load problems (for example an unknown passive tree
 -- version) only as a popup. Record popups instead of opening them, so a build
 -- PoB could not load properly is an error rather than a set of wrong numbers.
@@ -211,6 +215,7 @@ function bd_load(xml)
 	local saved, passes, before, after = bd_settle()
 	loadedXml = saved
 	dirty = false
+	collectgarbage("collect")
 	return saved, passes, before, after
 end
 
@@ -642,24 +647,38 @@ end
 -- Items
 ---------------------------------------------------------------------------
 
+-- Errors meant for the user start with "[user] "; the engine shows them as
+-- written instead of as a PoB failure.
+
 -- An item from its text (as the game copies it with Ctrl+C, or as PoB
 -- writes it), exactly as given: quality and rolls are not changed.
 local function readItem(raw)
 	local ok, item = pcall(new, "Item", raw)
 	if not ok or not item.base then
-		error("PoB cannot read this item. Copy it in game with Ctrl+C and paste all of its text.", 0)
+		error("[user] PoB cannot read this item. Copy it in game with Ctrl+C and paste all of its text.", 0)
 	end
 	return item
 end
 
--- The equipment slots an item can go in: the active item set's own slots
--- that PoB shows for this build, not weapon-swap slots or jewel sockets.
+-- The slots an item can go in, with a display label: the active item
+-- set's shown equipment slots (not weapon swap) and the allocated passive
+-- tree jewel sockets, numbered in tree order ("Jewel socket 2").
 local function equipSlots(item)
 	local itemsTab = build.itemsTab
-	local out = { }
+	local out, sockets = { }, { }
 	for _, slot in ipairs(itemsTab.orderedSlots) do
-		if not slot.nodeId and not slot.slotName:find("Swap") and slot:IsShown() and itemsTab:IsItemValidForSlot(item, slot.slotName) then
-			out[#out + 1] = slot
+		if slot.nodeId then
+			if build.spec.allocNodes[slot.nodeId] then
+				sockets[#sockets + 1] = slot
+			end
+		elseif not slot.slotName:find("Swap") and slot:IsShown() and itemsTab:IsItemValidForSlot(item, slot.slotName) then
+			out[#out + 1] = { slot = slot, label = slot.slotName }
+		end
+	end
+	table.sort(sockets, function(a, b) return a.nodeId < b.nodeId end)
+	for i, slot in ipairs(sockets) do
+		if itemsTab:IsItemValidForSlot(item, slot.slotName) then
+			out[#out + 1] = { slot = slot, label = "Jewel socket " .. i }
 		end
 	end
 	return out
@@ -671,9 +690,9 @@ function bd_item_info(raw)
 	ensureOriginal()
 	local item = readItem(raw)
 	local slots, unread = { }, { }
-	for _, slot in ipairs(equipSlots(item)) do
-		local current = build.itemsTab.items[slot.selItemId]
-		slots[#slots + 1] = { slot = slot.slotName, current = current and current.name or nil }
+	for _, fit in ipairs(equipSlots(item)) do
+		local current = build.itemsTab.items[fit.slot.selItemId]
+		slots[#slots + 1] = { slot = fit.slot.slotName, label = fit.label, current = current and current.name or nil }
 	end
 	for _, list in ipairs({ item.enchantModLines, item.runeModLines, item.implicitModLines, item.explicitModLines }) do
 		for _, modLine in ipairs(list or { }) do
@@ -692,9 +711,14 @@ function bd_with_item(raw, slotName)
 	assert(loadedXml, "no build loaded")
 	local itemsTab = build.itemsTab
 	local item = readItem(raw)
-	local slot = itemsTab.slots[slotName]
-	if not slot or slot.nodeId or not itemsTab:IsItemValidForSlot(item, slotName) then
-		error("This item cannot go in " .. tostring(slotName), 0)
+	local slot
+	for _, fit in ipairs(equipSlots(item)) do
+		if fit.slot.slotName == slotName then
+			slot = fit.slot
+		end
+	end
+	if not slot then
+		error("[user] This item cannot go in " .. tostring(slotName), 0)
 	end
 	local previous = slot.selItemId
 	itemsTab:AddItem(item, true)
@@ -715,6 +739,133 @@ function bd_with_item(raw, slotName)
 		error(xml, 0)
 	end
 	return xml, passes, warnings
+end
+
+---------------------------------------------------------------------------
+-- Gear: what each stat is worth in a slot
+---------------------------------------------------------------------------
+
+local tradeHelpers = LoadModule("Classes/TradeHelpers")
+-- PoB's table of trade-site stats with their roll ranges per item
+-- category (Data/QueryMods.lua, generated from game data), loaded once.
+local queryMods
+
+local function gearSlot(slotName)
+	local itemsTab = build.itemsTab
+	local slot = itemsTab.slots[slotName]
+	local item = slot and not slot.nodeId and itemsTab.items[slot.selItemId]
+	if not item then
+		return nil
+	end
+	local tradeCategory, category = tradeHelpers.getTradeCategory(slotName, item)
+	if not category or slotName:find("Flask") or slotName:find("Charm") then
+		return nil
+	end
+	return slot, item, tradeCategory, category
+end
+
+-- Equipment slots worn with an item that a trade search can replace: the
+-- active item set's shown slots, not weapon swap, flasks or charms.
+function bd_gear_slots()
+	ensureOriginal()
+	local out = { }
+	for _, slot in ipairs(build.itemsTab.orderedSlots) do
+		if not slot.slotName:find("Swap") and slot:IsShown() then
+			local _, item, tradeCategory, category = gearSlot(slot.slotName)
+			if item then
+				out[#out + 1] = {
+					slot = slot.slotName,
+					item = item.name,
+					base = item.baseName,
+					rarity = item.rarity,
+					category = category,
+					tradeCategory = tradeCategory,
+				}
+			end
+		end
+	end
+	return out
+end
+
+-- Trade stats that can roll on an item category, in a fixed order so
+-- workers can split them.
+local function statCandidates(category)
+	queryMods = queryMods or LoadModule("Data/QueryMods.lua")
+	local list = { }
+	for _, group in ipairs({ "Explicit", "Implicit" }) do
+		for _, entry in pairs(queryMods[group] or { }) do
+			if entry[category] then
+				list[#list + 1] = entry
+			end
+		end
+	end
+	table.sort(list, function(a, b) return a.tradeMod.id < b.tradeMod.id end)
+	return list
+end
+
+-- The mod line for a trade stat at the middle of its roll range for the
+-- category, written the way PoB's own trade search tests it; nil for stats
+-- that only roll negative values.
+local function midRollLine(entry, category)
+	local range = entry[category]
+	local value = math.ceil((range.max - range.min) * 0.5 + range.min)
+	if value < 0 then
+		return nil
+	end
+	local special = entry.specialCaseData or { }
+	local line
+	if value == 1 and special.overrideModLineSingular then
+		line = special.overrideModLineSingular
+	elseif value ~= 1 and special.overrideModLinePlural then
+		line = special.overrideModLinePlural
+	else
+		line = special.overrideModLine or entry.tradeMod.text
+	end
+	if line:find("+#") then
+		line = line:gsub("#", value)
+	elseif entry.usePositiveSign then
+		line = line:gsub("#", "+" .. value)
+	else
+		line = line:gsub("+?#", value)
+	end
+	return (line:gsub("%(Local%)", "")), value
+end
+
+-- What each trade stat that can roll in `slotName` is worth: a blank rare
+-- of the worn item's base replaces the worn item, then gets the stat alone
+-- at a mid roll, measured with PoB's calculator (the one behind its own
+-- trade search; it does not change the build). Only every `parts`-th
+-- candidate starting at `part` is measured, so workers can split them.
+function bd_stat_values(slotName, part, parts)
+	ensureOriginal()
+	local slot, item, _, category = gearSlot(slotName)
+	if not slot then
+		error("[user] Nothing a trade search can replace is worn in " .. tostring(slotName), 0)
+	end
+	local blank = new("Item", "Rarity: RARE\nStat Tester\n" .. item.baseName)
+	local calcFunc, baseOutput = build.calcsTab:GetMiscCalculator()
+	local blankOutput = calcFunc({ repSlotName = slotName, repItem = blank }, true)
+	local stats = { }
+	for index, entry in ipairs(statCandidates(category)) do
+		if (index - 1) % parts == part then
+			local line, value = midRollLine(entry, category)
+			if line then
+				blank.explicitModLines = { { line = line, custom = true } }
+				blank:BuildAndParseRaw()
+				local unread = (blank.modList and #blank.modList == 0)
+					or (blank.slotModList and #blank.slotModList[1] == 0 and #blank.slotModList[2] == 0)
+				if not unread then
+					stats[#stats + 1] = {
+						id = entry.tradeMod.id,
+						line = line,
+						value = value,
+						out = summarise(calcFunc({ repSlotName = slotName, repItem = blank }, true)),
+					}
+				end
+			end
+		end
+	end
+	return { current = summarise(baseOutput), blank = summarise(blankOutput), stats = stats }
 end
 
 function bd_take_log()

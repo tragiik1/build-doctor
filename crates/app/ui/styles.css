@@ -152,6 +152,30 @@ textarea.paste.item-paste { height: 180px; background: var(--surface-2); }
 .item-warnings { margin: 10px 0 2px; display: flex; flex-direction: column; gap: 4px; }
 .changes { margin-top: 8px; }
 
+.where { margin: 14px 0 0; font-size: 12.5px; line-height: 1.6; }
+
+/* Gear upgrades */
+.settings { display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: center; padding-top: 14px; }
+.field { display: flex; align-items: center; gap: 12px; }
+.field .field-label { margin-right: 0; }
+.input { background: var(--bg); border: 1px solid var(--border-strong); border-radius: 7px; padding: 6px 10px; outline: none; color: var(--text); font-size: 13px; user-select: text; transition: border-color 120ms; }
+.input:focus { border-color: var(--accent); }
+#league { width: 250px; }
+.price { display: inline-flex; gap: 6px; }
+#max-price { width: 72px; }
+select.input { appearance: none; padding-right: 28px; cursor: pointer; background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a2aab5' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 10px center; }
+.slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.slot-card { all: unset; cursor: pointer; display: flex; flex-direction: column; gap: 3px; padding: 11px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; transition: border-color 120ms, background 120ms; }
+.slot-card:hover { border-color: var(--border-strong); background: var(--surface-2); }
+.slot-card.on { border-color: var(--accent); background: var(--surface-2); }
+.slot-card .slot-name { font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase; font-weight: 600; color: var(--text-3); }
+.slot-card .slot-item, .slot-card .slot-base { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slot-card .slot-base { color: var(--text-3); font-size: 12px; }
+.check-label { display: inline-flex; align-items: center; gap: 8px; color: var(--text-2); cursor: pointer; }
+.how { margin: 14px 0 16px; padding-left: 18px; color: var(--text-2); display: flex; flex-direction: column; gap: 4px; }
+.stats-table td:first-child { user-select: text; }
+.stats-table th:not(:first-child), .stats-table td:not(:first-child) { width: 140px; white-space: nowrap; }
+
 /* Tables */
 table { width: 100%; border-collapse: collapse; }
 .kv td { padding: 6px 0; border-top: 1px solid var(--border); }

@@ -4,6 +4,7 @@ mod check;
 mod conditions;
 mod diagnose;
 mod fixtures;
+mod gear;
 mod item;
 mod realistic;
 mod todo;
@@ -56,6 +57,32 @@ enum Command {
     Diagnose {
         /// A PoB code, a path to a code or XML file, or a build link.
         build: String,
+        #[arg(long, default_value = PINNED_POB)]
+        pob: String,
+        #[arg(long)]
+        jobs: Option<usize>,
+    },
+
+    /// What to look for on gear: what each stat that can roll in a slot is
+    /// worth to the build, and a trade search link ranked by it. Without
+    /// --slot, lists the slots.
+    Gear {
+        /// A PoB code, a path to a code or XML file, or a build link.
+        build: String,
+        /// The slot to measure, as listed ("Ring 1", "Body Armour", …).
+        #[arg(long)]
+        slot: Option<String>,
+        /// Your league, for the trade link.
+        #[arg(long)]
+        league: Option<String>,
+        /// What the trade search ranks by.
+        #[arg(long, value_enum, default_value = "balanced")]
+        goal: GearGoalArg,
+        /// Highest price, in --currency.
+        #[arg(long)]
+        max_price: Option<f64>,
+        #[arg(long, default_value = "exalted")]
+        currency: String,
         #[arg(long, default_value = PINNED_POB)]
         pob: String,
         #[arg(long)]
@@ -157,6 +184,26 @@ enum EngineCommand {
         #[arg(long, default_value = PINNED_POB)]
         version: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum GearGoalArg {
+    /// Damage only.
+    Damage,
+    /// Total EHP and smallest max hit.
+    Survival,
+    /// Damage, Total EHP and smallest max hit.
+    Balanced,
+}
+
+impl From<GearGoalArg> for analysis::gear::Goal {
+    fn from(goal: GearGoalArg) -> Self {
+        match goal {
+            GearGoalArg::Damage => Self::Damage,
+            GearGoalArg::Survival => Self::Survival,
+            GearGoalArg::Balanced => Self::Balanced,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -290,6 +337,27 @@ fn run(cli: Cli) -> AnyResult<ExitCode> {
                 return print_json(&analysis::diagnose(&pool, &xml)?);
             }
             return diagnose::run(&pool, &xml);
+        }
+        Command::Gear {
+            build,
+            slot,
+            league,
+            goal,
+            max_price,
+            currency,
+            pob,
+            jobs,
+        } => {
+            let pool = pob::Pool::new(&installed(&data, &pob)?, jobs.unwrap_or_else(default_jobs))?;
+            let xml = pob::input::read_build(&build)?;
+            let options = league.map(|league| analysis::TradeOptions {
+                league,
+                goal: goal.into(),
+                max_price,
+                currency: Some(currency),
+                any_base: false,
+            });
+            return gear::run(&pool, &xml, slot.as_deref(), options.as_ref(), cli.json);
         }
         Command::Item {
             build,

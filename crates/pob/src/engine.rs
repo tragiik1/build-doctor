@@ -9,6 +9,8 @@ use mlua::{Lua, Table};
 use crate::{Error, Install, Result, StatSheet};
 
 const BRIDGE: &str = include_str!("../lua/bridge.lua");
+/// Marks a bridge error written for the user rather than raised by PoB.
+const USER_MESSAGE: &str = "[user] ";
 
 unsafe extern "C-unwind" {
     /// From the statically linked `lua-utf8` C module (vendor/luautf8).
@@ -131,7 +133,7 @@ impl Engine {
         let load: mlua::Function = self.lua.globals().get("bd_load")?;
         let (saved, passes, before, after) = load
             .call::<(Option<String>, u32, Option<String>, Option<String>)>(xml)
-            .map_err(|err| Error::Pob(self.describe(&err, false)))?;
+            .map_err(|err| self.pob_error(&err))?;
         let Some(xml) = saved else {
             let changing = changed_lines(
                 before.as_deref().unwrap_or(""),
@@ -151,7 +153,7 @@ impl Engine {
         let without: mlua::Function = self.lua.globals().get("bd_without_config")?;
         let (saved, passes) = without
             .call::<(Option<String>, u32)>(vars.to_vec())
-            .map_err(|err| Error::Pob(self.describe(&err, false)))?;
+            .map_err(|err| self.pob_error(&err))?;
         let xml = saved.ok_or(Error::Unsettled {
             passes,
             changing: Vec::new(),
@@ -169,7 +171,7 @@ impl Engine {
             .globals()
             .get::<mlua::Function>("bd_outputs")?
             .call(keys.to_vec())
-            .map_err(|err| Error::Pob(self.describe(&err, false)))?;
+            .map_err(|err| self.pob_error(&err))?;
         read_outputs(values)
     }
 
@@ -183,7 +185,7 @@ impl Engine {
             .globals()
             .get::<mlua::Function>("bd_probe_mods")?
             .call((lines.to_vec(), keys.to_vec()))
-            .map_err(|err| Error::Pob(self.describe(&err, false)))?;
+            .map_err(|err| self.pob_error(&err))?;
         read_outputs(values)
     }
 
@@ -204,7 +206,7 @@ impl Engine {
         let with: mlua::Function = self.lua.globals().get("bd_with_mods")?;
         let (saved, passes, values) = with
             .call::<(Option<String>, u32, Option<Table>)>((lines.to_vec(), keys.to_vec()))
-            .map_err(|err| Error::Pob(self.describe(&err, false)))?;
+            .map_err(|err| self.pob_error(&err))?;
         let (Some(xml), Some(values)) = (saved, values) else {
             return Err(Error::Unsettled {
                 passes,
@@ -222,7 +224,7 @@ impl Engine {
             .globals()
             .get::<mlua::Function>("bd_ensure_original")?
             .call::<()>(())
-            .map_err(|err| Error::Pob(self.describe(&err, false)))?;
+            .map_err(|err| self.pob_error(&err))?;
         let saved: Option<String> = self.lua.load("return bd_loaded_xml()").eval()?;
         saved.ok_or_else(|| Error::Pob("no build loaded".into()))
     }
@@ -299,6 +301,16 @@ impl Engine {
 
     /// A Lua error without its traceback, plus (when `with_log`) the tail of
     /// PoB's own output, which names the cause when PoB fails to start.
+    /// A Lua error as an [`Error`]: messages the bridge writes for the user
+    /// (marked `[user] `) as they are, anything else as PoB's error.
+    pub(crate) fn pob_error(&self, err: &mlua::Error) -> Error {
+        let text = self.describe(err, false);
+        match text.strip_prefix(USER_MESSAGE) {
+            Some(message) => Error::Message(message.to_owned()),
+            None => Error::Pob(text),
+        }
+    }
+
     pub(crate) fn describe(&self, err: &mlua::Error, with_log: bool) -> String {
         let message = match err {
             mlua::Error::RuntimeError(msg) => msg.clone(),
@@ -320,7 +332,6 @@ impl Engine {
     }
 }
 
-/// Up to five lines that differ between two saves, as `before -> after`.
 fn read_outputs(values: Table) -> Result<Outputs> {
     values
         .pairs::<String, f64>()
@@ -328,6 +339,7 @@ fn read_outputs(values: Table) -> Result<Outputs> {
         .collect()
 }
 
+/// Up to five lines that differ between two saves, as `before -> after`.
 fn changed_lines(before: &str, after: &str) -> Vec<String> {
     before
         .lines()
@@ -614,6 +626,20 @@ mod tests {
         assert_eq!(base.stats.diff(&restored), []);
 
         assert!(engine.with_item(ring, "Helmet").is_err());
+
+        // Jewels go in allocated passive tree sockets, restored the same way.
+        let jewel = "Rarity: RARE\nEmpyrean Creed\nSapphire\nImplicits: 0\n20% increased maximum Energy Shield\n";
+        let info = engine.item_info(jewel).unwrap();
+        let labels: Vec<&str> = info.slots.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            ["Jewel socket 1", "Jewel socket 2", "Jewel socket 3"]
+        );
+        let (calc, _) = engine.with_item(jewel, &info.slots[0].slot).unwrap();
+        assert_ne!(base.stats.diff(&calc.stats), []);
+        let restored = engine.ensure_original().unwrap();
+        let restored = StatSheet::from_build_xml(&restored).unwrap();
+        assert_eq!(base.stats.diff(&restored), []);
         for text in [
             "not an item",
             "Item Class: RingsRarity: RareGrim CoilSapphire Ring--------",
